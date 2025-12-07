@@ -4,6 +4,8 @@
 ![Next.js](https://img.shields.io/badge/Next.js-14-black)
 ![Tailwind CSS](https://img.shields.io/badge/Tailwind-CSS-38B2AC)
 ![Prisma](https://img.shields.io/badge/Prisma-ORM-2D3748)
+![GitHub stars](https://img.shields.io/github/stars/sxt2204/jiguang-navigation.svg?style=social)
+![GitHub forks](https://img.shields.io/github/forks/sxt2204/jiguang-navigation.svg?style=social)
 
 **JiGuang Navigation is a modern, highly customizable, and privacy-focused personal start page.**  
 **极光导航是一款现代、高度可定制且注重隐私的个人起始页。**
@@ -12,6 +14,8 @@ Built with the latest web technologies, it offers a stunning visual experience w
 基于最新的 Web 技术构建，提供极具质感的毛玻璃设计、流畅的动画效果以及强大的功能，助您高效管理数字生活。
 
 ---
+
+![效果展示](result.png)
 
 ## ✨ Features | 功能特性
 
@@ -28,6 +32,9 @@ Built with the latest web technologies, it offers a stunning visual experience w
 
 - **Theme Switching**: Seamless toggle between Dark and Light modes.  
   **主题切换**：完美适配的日夜间模式切换，所有 UI 元素自动适应。
+
+- **Typography System**: Global font customization with smart inheritance.  
+  **排版系统**：全局字体自定义，支持智能继承与系统字体回退。
 
 ### 🧭 Navigation & Organization | 导航与整理
 
@@ -53,8 +60,11 @@ Built with the latest web technologies, it offers a stunning visual experience w
 
 ### 🛠️ Advanced Customization | 高级定制
 
-- **Layout Settings**: Adjust grid columns, card size, and fonts.  
-  **布局设置**：调节网格列数、卡片尺寸及字体。
+- **Layout Settings**: Adjust grid columns, card size, fonts, and compact mode.  
+  **布局设置**：调节网格列数、卡片尺寸、字体以及紧凑模式。
+
+- **Site Identity**: Customize logo text, highlight, and footer links.  
+  **站点标识**：自定义 Logo 文字、高亮色及页脚链接管理。
 
 - **Icon System**: Auto-fetch favicons, upload images, or use built-in icons.  
   **图标系统**：自动抓取图标，支持上传图片或使用内置图标库。
@@ -76,7 +86,7 @@ Built with the latest web technologies, it offers a stunning visual experience w
   **图标同步优化**：智能缓存与去重算法，最小化存储占用与带宽消耗。
 
 - **Optimistic UI**: Instant interactions with background saving.  
-  **乐观 UI**：操作即时响应，后台异步保存，体验极致流畅。
+  **美观 UI**：操作即时响应，后台异步保存，体验极致流畅。
 
 - **Local First**: Prioritizes local storage for instant loading.  
   **本地优先**：优先加载本地缓存，实现秒开。
@@ -108,8 +118,8 @@ Built with the latest web technologies, it offers a stunning visual experience w
 
 1. **Clone the repository | 克隆仓库**
    ```bash
-   git clone https://github.com/fm222/jg_nav.git
-   cd jg-nav
+   git clone https://github.com/sxt2204/jiguang-navigation.git
+   cd jiguang-navigation
    ```
 
 2. **Install dependencies | 安装依赖**
@@ -132,8 +142,8 @@ Built with the latest web technologies, it offers a stunning visual experience w
    ```
 
 5. **Open Browser | 打开浏览器**
-   Visit `http://localhost:2266` to see your new start page!  
-   访问 `http://localhost:2266` 查看您的新起始页！
+   Visit `http://localhost:3000` to see your new start page!  
+   访问 `http://localhost:3000` 查看您的新起始页！
 
 ---
 
@@ -177,8 +187,8 @@ Built with the latest web technologies, it offers a stunning visual experience w
 
 ## 📄 License | 许可协议
 
-This project is licensed under the MIT License.  
-本项目基于 MIT 协议开源。
+This project is licensed under the Apache 2.0 License.  
+本项目基于 Apache 2.0 协议开源。
 
 See the [LICENSE](LICENSE) file for details.  
 详见 [LICENSE](LICENSE) 文件。
