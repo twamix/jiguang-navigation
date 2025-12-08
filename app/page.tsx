@@ -789,209 +789,240 @@ export default function AuroraNav() {
         <Toast notification={toast} onClose={() => setToast(prev => ({ ...prev, show: false }))}
           isDarkMode={isDarkMode} />
 
-        {/* 私有模式锁定界面 */}
-        {appConfig.privateMode && !isLoggedIn && !isGuestVerified && (
-          <PrivateModeScreen
-            isDarkMode={isDarkMode}
-            onVerify={async (password: string) => {
-              try {
-                const res = await fetch('/api/auth/login', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ username: 'admin', password })
-                });
-                if (res.ok) {
-                  setIsGuestVerified(true);
-                  // Save verification state for this session
-                  if (typeof window !== 'undefined') {
-                    sessionStorage.setItem('aurora_guest_verified', 'true');
-                  }
-                  return true;
-                }
-                return false;
-              } catch {
-                return false;
-              }
-            }}
-            appConfig={appConfig}
-          />
-        )}
-
-
-
-        <div
-          className={`fixed inset-0 z-40 bg-black/50 backdrop-blur-[2px] transition-all duration-300 ease-out ${isSearchFocused ? 'opacity-100 visible' : 'opacity-0 invisible pointer-events-none'}`}
-          onClick={() => setIsSearchFocused(false)} />
-
-        {/* Header - Scroll Aware & Optimized */}
-        <Header
-          isDarkMode={isDarkMode}
-          setIsDarkMode={setIsDarkMode}
-          layoutSettings={layoutSettings}
-          isScrolled={isScrolled}
-          appConfig={appConfig}
-          searchQuery={searchQuery}
-          setSearchQuery={setSearchQuery}
-          isSearchFocused={isSearchFocused}
-          setIsSearchFocused={setIsSearchFocused}
-          searchInputRef={searchInputRef}
-          handleSearchChange={handleSearchChange}
-          currentEngineId={currentEngineId}
-          setCurrentEngineId={setCurrentEngineId}
-          isEngineMenuOpen={isEngineMenuOpen}
-          setIsEngineMenuOpen={setIsEngineMenuOpen}
-          searchSuggestions={searchSuggestions}
-          setSearchSuggestions={setSearchSuggestions}
-          isLoggedIn={isLoggedIn}
-          setIsLoggedIn={setIsLoggedIn}
-          setEditingSite={setEditingSite}
-          setIsModalOpen={setIsModalOpen}
-          isSettingsOpen={isSettingsOpen}
-          setIsSettingsOpen={setIsSettingsOpen}
-          setIsAccountSettingsModalOpen={setIsAccountSettingsModalOpen}
-          setIsLoginModalOpen={setIsLoginModalOpen}
-        />
-
-        {/* Content Container */}
-        <div
-          className={`mx-auto w-full transition-all duration-300 flex-1 ${containerClass} ${layoutSettings.stickyHeader ? 'pt-28' : ''} ${layoutSettings.stickyFooter ? 'pb-28' : ''}`}>
-          {layoutSettings.showWidgets && !isSearching && (
-            <div className={layoutSettings.compactMode ? 'mb-4 mt-2' : 'mb-8 mt-4'}>
-              <WidgetDashboard isDarkMode={isDarkMode} sitesCount={sites.length} />
+        {/* 私有模式锁定界面 - Prevent Flash: Show if configured OR if loading (security first) ?? No, if loading, we don't know configuration.
+            If we show lock on loading, it flashes lock for everyone.
+            Solution: If isLoading, show specific Loading State.
+            If !isLoading && privateMode, show Lock.
+            If !isLoading && !privateMode, show Content.
+         */}
+        {isLoading ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-50 dark:bg-slate-900 transition-opacity">
+            <div className="flex flex-col items-center gap-4 animate-in fade-in duration-700">
+              <div className="w-12 h-12 rounded-full border-4 border-indigo-500/30 border-t-indigo-500 animate-spin" />
+              <p className="text-sm font-medium opacity-50 animate-pulse">正在加载配置...</p>
             </div>
-          )}
-
-          {/* HTML5 Content Section - Header Bottom */}
-          <div className={`w-full ${layoutSettings.compactMode ? 'mb-4' : 'mb-8'} flex ${appConfig.htmlConfig?.headerLayout === 'row' ? 'flex-row flex-wrap justify-center gap-4' : 'flex-col items-center gap-4'}`}>
-            <SortableContext items={(appConfig.htmlConfig?.header || []).map((s: any) => s.id)} strategy={verticalListSortingStrategy}>
-              {(appConfig.htmlConfig?.header || []).map((section: any, idx: number) => (
-                <SortableHtmlSection key={section.id || `header-${idx}`} config={section} isDarkMode={isDarkMode} isLoggedIn={isLoggedIn} onContextMenu={handleHtmlContextMenu} />
-              ))}
-            </SortableContext>
           </div>
-
-          {/* Category Tabs */}
-          <nav
-            className={`sticky z-30 w-full ${layoutSettings.compactMode ? 'mb-4' : 'mb-8'} transition-all duration-500 ease-[cubic-bezier(0.4,0,0.2,1)] ${isScrolled ? 'top-[4.5rem]' : 'top-[5.5rem]'}`}>
-            <div className="flex justify-center">
-              <div
-                className={`relative flex items-center p-1.5 rounded-full overflow-x-auto custom-scrollbar max-w-full backdrop-blur-xl border shadow-2xl shadow-indigo-500/10 ${isDarkMode ? 'bg-slate-900/80 border-white/10' : 'bg-white/70 border-white/60 ring-1 ring-white/60'}`}>
-                <CategoryPill
-                  label="全部"
-                  active={activeTab === '全部'}
-                  onClick={() => setActiveTab('全部')}
-                  isDarkMode={isDarkMode}
-                  color={getCategoryColor('全部')}
-                  navColorMode={layoutSettings.navColorMode}
-                />
-                <div
-                  className={`w-px h-5 mx-1 shrink-0 ${isDarkMode ? 'bg-white/10' : 'bg-slate-400/30'}`}></div>
-                {categories.filter(cat => !hiddenCategories.includes(cat)).map(cat => (
-                  <CategoryPill
-                    key={cat}
-                    label={cat}
-                    active={activeTab === cat}
-                    onClick={() => setActiveTab(cat)}
-                    isDarkMode={isDarkMode}
-                    color={getCategoryColor(cat)}
-                    navColorMode={layoutSettings.navColorMode}
-                    settings={layoutSettings}
-                  />
-                ))}
-              </div>
-            </div>
-          </nav>
-
-          {/* Main Grid */}
-          <main className="relative min-h-[40vh] pb-10">
-            {isLoggedIn && isSettingsOpen && (
-              <SettingsPanel
+        ) : (
+          <>
+            {appConfig.privateMode && !isLoggedIn && !isGuestVerified ? (
+              <PrivateModeScreen
                 isDarkMode={isDarkMode}
-                onClose={() => setIsSettingsOpen(false)}
-                isWallpaperManagerOpen={isWallpaperManagerOpen}
-                setIsWallpaperManagerOpen={setIsWallpaperManagerOpen}
-                activeTab={activeSettingTab}
-                setActiveTab={setActiveSettingTab}
-                layoutSettings={layoutSettings}
-                setLayoutSettings={setLayoutSettings}
-                categories={categories}
-                categoryColors={categoryColors}
-                setCategoryColors={setCategoryColors}
-                hiddenCategories={hiddenCategories}
-                toggleCategoryVisibility={(c: string) => setHiddenCategories(prev => prev.includes(c) ? prev.filter(x => x !== c) : [...prev, c])}
-                handleDeleteCategory={(c: string) => setConfirmingDeleteCategory(c)}
-                handleAddCategory={async (n: string) => {
-                  const name = n.trim();
-                  if (!name) return;
-                  if (categories.includes(name)) {
-                    showToast('分类已存在', 'error');
-                    return;
-                  }
+                onVerify={async (password: string) => {
                   try {
-                    const res = await fetch('/api/categories', {
+                    const res = await fetch('/api/auth/login', {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ name, order: categories.length })
+                      body: JSON.stringify({ username: 'admin', password })
                     });
                     if (res.ok) {
-                      setCategories([...categories, name]);
-                      showToast('分类添加成功');
-                    } else {
-                      showToast('添加失败', 'error');
+                      setIsGuestVerified(true);
+                      if (typeof window !== 'undefined') {
+                        sessionStorage.setItem('aurora_guest_verified', 'true');
+                      }
+                      return true;
                     }
-                  } catch (e) {
-                    showToast('添加失败', 'error');
+                    return false;
+                  } catch {
+                    return false;
                   }
                 }}
-                sites={sites}
-                setSites={setSites}
-                setCategories={setCategories}
-                moveCategory={moveCategory}
-                handleImportData={handleImportData}
                 appConfig={appConfig}
-                setAppConfig={setAppConfig}
-                showToast={showToast}
-                setBingWallpaper={setBingWallpaper}
-                setIsModalOpen={setIsModalOpen}
-                setEditingSite={setEditingSite}
-                onDeleteSite={(site: any) => setConfirmingDeleteSite(site)}
               />
+            ) : (
+              <>
+                {/* Overlay */}
+                <div
+                  className={`fixed inset-0 z-40 bg-black/50 backdrop-blur-[2px] transition-all duration-300 ease-out ${isSearchFocused ? 'opacity-100 visible' : 'opacity-0 invisible pointer-events-none'}`}
+                  onClick={() => setIsSearchFocused(false)} />
+
+                {/* Header */}
+                <Header
+                  isDarkMode={isDarkMode}
+                  setIsDarkMode={setIsDarkMode}
+                  layoutSettings={layoutSettings}
+                  isScrolled={isScrolled}
+                  appConfig={appConfig}
+                  searchQuery={searchQuery}
+                  setSearchQuery={setSearchQuery}
+                  isSearchFocused={isSearchFocused}
+                  setIsSearchFocused={setIsSearchFocused}
+                  searchInputRef={searchInputRef}
+                  handleSearchChange={handleSearchChange}
+                  currentEngineId={currentEngineId}
+                  setCurrentEngineId={setCurrentEngineId}
+                  isEngineMenuOpen={isEngineMenuOpen}
+                  setIsEngineMenuOpen={setIsEngineMenuOpen}
+                  searchSuggestions={searchSuggestions}
+                  setSearchSuggestions={setSearchSuggestions}
+                  isLoggedIn={isLoggedIn}
+                  setIsLoggedIn={setIsLoggedIn}
+                  setEditingSite={setEditingSite}
+                  setIsModalOpen={setIsModalOpen}
+                  isSettingsOpen={isSettingsOpen}
+                  setIsSettingsOpen={setIsSettingsOpen}
+                  setIsAccountSettingsModalOpen={setIsAccountSettingsModalOpen}
+                  setIsLoginModalOpen={setIsLoginModalOpen}
+                />
+
+                {/* Content Container */}
+                <div
+                  className={`mx-auto w-full transition-all duration-300 flex-1 ${containerClass} ${layoutSettings.stickyHeader ? 'pt-28' : ''} ${layoutSettings.stickyFooter ? 'pb-28' : ''}`}>
+                  {!isLoading && layoutSettings.showWidgets && !isSearching && (
+                    <div className={layoutSettings.compactMode ? 'mb-4 mt-2' : 'mb-8 mt-4'}>
+                      <WidgetDashboard isDarkMode={isDarkMode} sitesCount={sites.length} widgetStyle={layoutSettings.widgetStyle as "A" | "B" | "C"} widgetConfig={appConfig.widgetConfig} />
+                    </div>
+                  )}
+
+                  {/* HTML5 Content Section - Header Bottom */}
+                  <div className={`w-full ${layoutSettings.compactMode ? 'mb-4' : 'mb-8'} flex ${appConfig.htmlConfig?.headerLayout === 'row' ? 'flex-row flex-wrap justify-center gap-4' : 'flex-col items-center gap-4'}`}>
+                    <SortableContext items={(appConfig.htmlConfig?.header || []).map((s: any) => s.id)} strategy={verticalListSortingStrategy}>
+                      {(appConfig.htmlConfig?.header || []).map((section: any, idx: number) => (
+                        <SortableHtmlSection key={section.id || `header-${idx}`} config={section} isDarkMode={isDarkMode} isLoggedIn={isLoggedIn} onContextMenu={handleHtmlContextMenu} />
+                      ))}
+                    </SortableContext>
+                  </div>
+
+                  {/* Category Tabs */}
+                  {!isLoading && (layoutSettings.showNavBar ?? true) && (
+                    <nav
+                      className={`sticky z-30 w-full ${layoutSettings.compactMode ? 'mb-4' : 'mb-8'} transition-all duration-500 ease-[cubic-bezier(0.4,0,0.2,1)] ${isScrolled ? 'top-[4.5rem]' : 'top-[5.5rem]'}`}>
+                      <div className="flex justify-center">
+                        <div
+                          onMouseMove={(e) => {
+                            const bounds = e.currentTarget.getBoundingClientRect();
+                            e.currentTarget.style.setProperty('--mouse-x', `${e.clientX - bounds.left}px`);
+                            e.currentTarget.style.setProperty('--mouse-y', `${e.clientY - bounds.top}px`);
+                          }}
+                          className={`group/nav relative flex items-center gap-4 p-2 rounded-full overflow-hidden custom-scrollbar max-w-full backdrop-blur-2xl shadow-2xl shadow-indigo-500/10 ${isDarkMode ? 'bg-slate-900/60 ring-1 ring-white/10' : 'bg-white/60 ring-1 ring-white/60'}`}>
+
+                          {/* Spotlight Effect */}
+                          <div className={`pointer-events-none absolute -inset-px rounded-full opacity-0 transition-opacity duration-300 group-hover/nav:opacity-100 ${isDarkMode ? 'mix-blend-overlay' : 'mix-blend-multiply'}`}
+                            style={{
+                              background: `radial-gradient(600px circle at var(--mouse-x) var(--mouse-y), ${isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(99,102,241,0.05)'}, transparent 40%)`
+                            }}
+                          />
+
+                          <CategoryPill
+                            label="全部"
+                            active={activeTab === '全部'}
+                            onClick={() => setActiveTab('全部')}
+                            isDarkMode={isDarkMode}
+                            color={getCategoryColor('全部')}
+                            navColorMode={layoutSettings.navColorMode}
+                          />
+                          <div
+                            className={`w-px h-5 shrink-0 ${isDarkMode ? 'bg-white/10' : 'bg-slate-400/20'}`}></div>
+                          {categories.filter(cat => !hiddenCategories.includes(cat)).map(cat => (
+                            <CategoryPill
+                              key={cat}
+                              label={cat}
+                              active={activeTab === cat}
+                              onClick={() => setActiveTab(cat)}
+                              isDarkMode={isDarkMode}
+                              color={getCategoryColor(cat)}
+                              navColorMode={layoutSettings.navColorMode}
+                              settings={layoutSettings}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    </nav>
+                  )}
+
+                  {/* Main Grid */}
+                  <main className="relative min-h-[40vh] pb-10">
+                    {isLoggedIn && isSettingsOpen && (
+                      <SettingsPanel
+                        isDarkMode={isDarkMode}
+                        onClose={() => setIsSettingsOpen(false)}
+                        isWallpaperManagerOpen={isWallpaperManagerOpen}
+                        setIsWallpaperManagerOpen={setIsWallpaperManagerOpen}
+                        activeTab={activeSettingTab}
+                        setActiveTab={setActiveSettingTab}
+                        layoutSettings={layoutSettings}
+                        setLayoutSettings={setLayoutSettings}
+                        categories={categories}
+                        categoryColors={categoryColors}
+                        setCategoryColors={setCategoryColors}
+                        hiddenCategories={hiddenCategories}
+                        toggleCategoryVisibility={(c: string) => setHiddenCategories(prev => prev.includes(c) ? prev.filter(x => x !== c) : [...prev, c])}
+                        handleDeleteCategory={(c: string) => setConfirmingDeleteCategory(c)}
+                        handleAddCategory={async (n: string) => {
+                          const name = n.trim();
+                          if (!name) return;
+                          if (categories.includes(name)) {
+                            showToast('分类已存在', 'error');
+                            return;
+                          }
+                          try {
+                            const res = await fetch('/api/categories', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ name, order: categories.length })
+                            });
+                            if (res.ok) {
+                              setCategories([...categories, name]);
+                              showToast('分类添加成功');
+                            } else {
+                              showToast('添加失败', 'error');
+                            }
+                          } catch (e) {
+                            showToast('添加失败', 'error');
+                          }
+                        }}
+                        sites={sites}
+                        setSites={setSites}
+                        setCategories={setCategories}
+                        moveCategory={moveCategory}
+                        handleImportData={handleImportData}
+                        appConfig={appConfig}
+                        setAppConfig={setAppConfig}
+                        showToast={showToast}
+                        setBingWallpaper={setBingWallpaper}
+                        setIsModalOpen={setIsModalOpen}
+                        setEditingSite={setEditingSite}
+                        onDeleteSite={(site: any) => setConfirmingDeleteSite(site)}
+                      />
+                    )}
+
+                    {/* Site Grid */}
+                    <div className={layoutSettings.compactMode ? 'space-y-4' : 'space-y-10'}>
+                      <SiteGrid
+                        isLoading={isLoading}
+                        filteredSites={filteredSites}
+                        isSearching={isSearching}
+                        activeTab={activeTab}
+                        categories={categories}
+                        hiddenCategories={hiddenCategories}
+                        layoutSettings={layoutSettings}
+                        isDarkMode={isDarkMode}
+                        isLoggedIn={isLoggedIn}
+                        onEdit={(site: any) => {
+                          setEditingSite(site);
+                          setIsModalOpen(true);
+                        }}
+                        onDelete={(site: any) => setConfirmingDeleteSite(site)}
+                        onContextMenu={handleContextMenu}
+                        getCategoryColor={getCategoryColor}
+                      />
+                    </div>
+                  </main>
+
+                  {/* HTML5 Content Section - Footer Top */}
+                  <div className={`w-full mb-8 flex ${appConfig.htmlConfig?.footerLayout === 'row' ? 'flex-row flex-wrap justify-center gap-4' : 'flex-col items-center gap-4'}`}>
+                    <SortableContext items={(appConfig.htmlConfig?.footer || []).map((s: any) => s.id)} strategy={verticalListSortingStrategy}>
+                      {(appConfig.htmlConfig?.footer || []).map((section: any, idx: number) => (
+                        <SortableHtmlSection key={section.id || `footer-${idx}`} config={section} isDarkMode={isDarkMode} isLoggedIn={isLoggedIn} onContextMenu={handleHtmlContextMenu} />
+                      ))}
+                    </SortableContext>
+                  </div>
+                </div>
+
+                <Footer isDarkMode={isDarkMode} appConfig={appConfig} isSticky={layoutSettings.stickyFooter} />
+              </>
             )}
-
-            {/* Site Grid */}
-            <div className={layoutSettings.compactMode ? 'space-y-4' : 'space-y-10'}>
-              <SiteGrid
-                isLoading={isLoading}
-                filteredSites={filteredSites}
-                isSearching={isSearching}
-                activeTab={activeTab}
-                categories={categories}
-                hiddenCategories={hiddenCategories}
-                layoutSettings={layoutSettings}
-                isDarkMode={isDarkMode}
-                isLoggedIn={isLoggedIn}
-                onEdit={(site: any) => {
-                  setEditingSite(site);
-                  setIsModalOpen(true);
-                }}
-                onDelete={(site: any) => setConfirmingDeleteSite(site)}
-                onContextMenu={handleContextMenu}
-                getCategoryColor={getCategoryColor}
-              />
-            </div>
-          </main>
-
-          {/* HTML5 Content Section - Footer Top */}
-          <div className={`w-full mb-8 flex ${appConfig.htmlConfig?.footerLayout === 'row' ? 'flex-row flex-wrap justify-center gap-4' : 'flex-col items-center gap-4'}`}>
-            <SortableContext items={(appConfig.htmlConfig?.footer || []).map((s: any) => s.id)} strategy={verticalListSortingStrategy}>
-              {(appConfig.htmlConfig?.footer || []).map((section: any, idx: number) => (
-                <SortableHtmlSection key={section.id || `footer-${idx}`} config={section} isDarkMode={isDarkMode} isLoggedIn={isLoggedIn} onContextMenu={handleHtmlContextMenu} />
-              ))}
-            </SortableContext>
-          </div>
-        </div>
-
-        <Footer isDarkMode={isDarkMode} appConfig={appConfig} isSticky={layoutSettings.stickyFooter} />
+          </>
+        )}
 
         <DragOverlay adjustScale style={{ transformOrigin: '0 0 ' }}>
           {activeDragSite ? (

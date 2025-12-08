@@ -3,7 +3,7 @@ import {
     Palette, ImageIcon, Layout, Globe, List, Settings, X, Type, ZoomIn, CheckCircle2,
     PaintBucket, ImagePlus, RefreshCw, UploadCloud, Move, Lock, Code, Plus, Trash2,
     HardDrive, Download, EyeOff, Eye, ArrowUp, ArrowDown, GripVertical, Image as WallpaperIcon,
-    Sparkles, MousePointer2, Hand, LayoutList, Layers, ExternalLink, ChevronRight, ChevronDown // Added icons
+    Sparkles, MousePointer2, Hand, LayoutList, Layers, ExternalLink, ChevronRight, ChevronDown, Share2
 } from 'lucide-react';
 import {
     DndContext,
@@ -33,7 +33,7 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 
-import { FONTS, FRESH_BACKGROUND_COLORS } from '@/lib/constants';
+import { FONTS, FRESH_BACKGROUND_COLORS, SOCIAL_ICONS } from '@/lib/constants';
 import { RangeControl } from '@/app/components/ui/RangeControl';
 import { NewCategoryInput } from '@/app/components/settings/NewCategoryInput';
 import { BackgroundPositionPreview } from '@/app/components/settings/BackgroundPositionPreview';
@@ -192,6 +192,21 @@ export function SettingsPanel({
         // Filter Custom Fonts
         const customFonts = allFonts.filter((f: any) => f.isCustom);
 
+        // Fetch Todos and Countdowns
+        let todos = [];
+        let countdowns = [];
+        try {
+            const [todoRes, countdownRes] = await Promise.all([
+                fetch('/api/todos'),
+                fetch('/api/countdowns')
+            ]);
+            if (todoRes.ok) todos = await todoRes.json();
+            if (countdownRes.ok) countdowns = await countdownRes.json();
+        } catch (e) {
+            console.error('Failed to fetch widget data', e);
+            showToast('组件数据获取失败，将仅导出配置', 'error');
+        }
+
         const data = JSON.stringify({
             sites,
             categories,
@@ -200,7 +215,9 @@ export function SettingsPanel({
             config: appConfig,
             hiddenCategories, // Export hidden state
             theme: { isDarkMode }, // Export theme
-            customFonts // Export custom fonts
+            customFonts, // Export custom fonts
+            todos, // Export todos
+            countdowns // Export countdowns
         });
 
         const blob = new Blob([data], { type: 'application/json' });
@@ -839,6 +856,10 @@ export function SettingsPanel({
                                             <Switch id="show-widgets" checked={layoutSettings.showWidgets} onCheckedChange={(c) => setLayoutSettings({ ...layoutSettings, showWidgets: c })} />
                                         </div>
                                         <div className={`flex items-center justify-between p-3 rounded-xl border transition-all hover:border-indigo-500/50 ${isDarkMode ? 'bg-white/5 border-white/5' : 'bg-slate-50 border-slate-100'}`}>
+                                            <Label htmlFor="show-navbar" className="cursor-pointer font-medium">显示导航条</Label>
+                                            <Switch id="show-navbar" checked={layoutSettings.showNavBar ?? true} onCheckedChange={(c) => setLayoutSettings({ ...layoutSettings, showNavBar: c })} />
+                                        </div>
+                                        <div className={`flex items-center justify-between p-3 rounded-xl border transition-all hover:border-indigo-500/50 ${isDarkMode ? 'bg-white/5 border-white/5' : 'bg-slate-50 border-slate-100'}`}>
                                             <Label htmlFor="sticky-header" className="cursor-pointer font-medium">固定页首</Label>
                                             <Switch id="sticky-header" checked={layoutSettings.stickyHeader} onCheckedChange={(c) => setLayoutSettings({ ...layoutSettings, stickyHeader: c })} />
                                         </div>
@@ -846,8 +867,8 @@ export function SettingsPanel({
                                             <Label htmlFor="sticky-footer" className="cursor-pointer font-medium">固定页尾</Label>
                                             <Switch id="sticky-footer" checked={layoutSettings.stickyFooter} onCheckedChange={(c) => setLayoutSettings({ ...layoutSettings, stickyFooter: c })} />
                                         </div>
-                                    </div>
 
+                                    </div>
                                 </div>
                                 <div className="space-y-4"><h4 className="text-base font-bold opacity-80">卡片样式</h4>
                                     <div className="grid grid-cols-2 gap-3">
@@ -885,13 +906,6 @@ export function SettingsPanel({
                                     <div className="space-y-4">
                                         <h4 className="text-base font-bold opacity-80 flex items-center gap-2"><Type
                                             size={16} /> 网站标识</h4>
-                                        <div className="space-y-1.5">
-                                            <Label>网页标题</Label>
-                                            <Input
-                                                value={appConfig.siteTitle}
-                                                onChange={e => setAppConfig({ ...appConfig, siteTitle: e.target.value })}
-                                            />
-                                        </div>
                                         <div className="space-y-4 animate-in fade-in">
                                             <div className="space-y-3">
                                                 <Label>Logo 图片</Label>
@@ -913,18 +927,32 @@ export function SettingsPanel({
 
                                             <Separator />
 
-                                            <div className="grid grid-cols-2 gap-3">
-                                                <div className="space-y-1.5">
-                                                    <Label>Logo 主文字</Label>
-                                                    <Input
+                                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                                                <div className={`rounded-xl border transition-colors focus-within:ring-1 focus-within:ring-indigo-500/50 ${isDarkMode ? 'bg-white/5 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
+                                                    <label className={`block text-xs font-bold px-3 py-2 opacity-60 text-center border-b ${isDarkMode ? 'border-white/5' : 'border-slate-200'}`}>网页标题</label>
+                                                    <input
+                                                        type="text"
+                                                        className="w-full bg-transparent border-0 p-0 px-3 py-2 text-base focus:ring-0 outline-none placeholder:text-muted-foreground/30 text-center font-medium"
+                                                        value={appConfig.siteTitle}
+                                                        onChange={e => setAppConfig({ ...appConfig, siteTitle: e.target.value })}
+                                                        placeholder="未命名站点"
+                                                    />
+                                                </div>
+                                                <div className={`rounded-xl border transition-colors focus-within:ring-1 focus-within:ring-indigo-500/50 ${isDarkMode ? 'bg-white/5 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
+                                                    <label className={`block text-xs font-bold px-3 py-2 opacity-60 text-center border-b ${isDarkMode ? 'border-white/5' : 'border-slate-200'}`}>Logo 主文字</label>
+                                                    <input
+                                                        type="text"
+                                                        className="w-full bg-transparent border-0 p-0 px-3 py-2 text-base focus:ring-0 outline-none placeholder:text-muted-foreground/30 text-center font-medium"
                                                         value={appConfig.logoText}
                                                         onChange={e => setAppConfig({ ...appConfig, logoText: e.target.value })}
                                                         placeholder="例如：极光"
                                                     />
                                                 </div>
-                                                <div className="space-y-1.5">
-                                                    <Label>Logo 高亮文字</Label>
-                                                    <Input
+                                                <div className={`rounded-xl border transition-colors focus-within:ring-1 focus-within:ring-indigo-500/50 ${isDarkMode ? 'bg-white/5 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
+                                                    <label className={`block text-xs font-bold px-3 py-2 opacity-60 text-center border-b ${isDarkMode ? 'border-white/5' : 'border-slate-200'}`}>Logo 高亮文字</label>
+                                                    <input
+                                                        type="text"
+                                                        className="w-full bg-transparent border-0 p-0 px-3 py-2 text-base focus:ring-0 outline-none placeholder:text-muted-foreground/30 text-center font-medium"
                                                         value={appConfig.logoHighlight}
                                                         onChange={e => setAppConfig({ ...appConfig, logoHighlight: e.target.value })}
                                                         placeholder="例如：导航"
@@ -967,6 +995,196 @@ export function SettingsPanel({
                                             </Button>
                                         </div>
 
+                                        {/* Social Icons Editor */}
+                                        <div className="space-y-3 mt-6 pt-6 border-t border-dashed border-slate-200 dark:border-white/10">
+                                            <Label className="flex items-center gap-2"><Share2 size={14} /> 社交图标</Label>
+
+                                            {/* Available Icons Grid */}
+                                            <div className={`p-3 rounded-xl border ${isDarkMode ? 'bg-white/5 border-white/5' : 'bg-slate-50 border-slate-100'}`}>
+                                                <p className="text-xs opacity-50 mb-2">点击添加图标：</p>
+                                                <div className="flex flex-wrap gap-2">
+                                                    {SOCIAL_ICONS.map((social) => {
+                                                        const Icon = social.icon;
+                                                        const isAdded = (appConfig.socialLinks || []).some((s: any) => s.icon === social.id);
+                                                        return (
+                                                            <button
+                                                                key={social.id}
+                                                                onClick={() => {
+                                                                    if (!isAdded) {
+                                                                        setAppConfig({
+                                                                            ...appConfig,
+                                                                            socialLinks: [...(appConfig.socialLinks || []), { icon: social.id, url: '' }]
+                                                                        });
+                                                                    }
+                                                                }}
+                                                                disabled={isAdded}
+                                                                title={social.name}
+                                                                className={`p-2 rounded-lg border transition-all ${isAdded ? 'opacity-30 cursor-not-allowed border-transparent' : 'hover:bg-indigo-500/10 hover:border-indigo-500/50 border-transparent cursor-pointer'}`}
+                                                            >
+                                                                <Icon size={18} />
+                                                            </button>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </div>
+
+                                            {/* Added Social Links */}
+                                            {(appConfig.socialLinks || []).length > 0 && (
+                                                <div className="space-y-2">
+                                                    {(appConfig.socialLinks || []).map((link: any, i: number) => {
+                                                        const socialDef = SOCIAL_ICONS.find(s => s.id === link.icon);
+                                                        const Icon = socialDef?.icon || Globe;
+                                                        return (
+                                                            <div key={i} className="flex gap-2 items-center animate-in fade-in slide-in-from-left-2" style={{ animationDelay: `${i * 50}ms` }}>
+                                                                <div className={`p-2 rounded-lg ${isDarkMode ? 'bg-white/10' : 'bg-slate-100'}`}>
+                                                                    <Icon size={16} />
+                                                                </div>
+                                                                <Input
+                                                                    className="flex-1"
+                                                                    value={link.url}
+                                                                    onChange={(e) => {
+                                                                        const newLinks = [...(appConfig.socialLinks || [])];
+                                                                        newLinks[i] = { ...newLinks[i], url: e.target.value };
+                                                                        setAppConfig({ ...appConfig, socialLinks: newLinks });
+                                                                    }}
+                                                                    placeholder={`${socialDef?.name || 'Link'} URL`}
+                                                                />
+                                                                <button
+                                                                    onClick={() => {
+                                                                        const newLinks = [...(appConfig.socialLinks || [])];
+                                                                        newLinks.splice(i, 1);
+                                                                        setAppConfig({ ...appConfig, socialLinks: newLinks });
+                                                                    }}
+                                                                    className="p-2.5 text-slate-400 hover:text-red-500 hover:bg-red-500/10 rounded-xl transition-colors"
+                                                                >
+                                                                    <Trash2 size={16} />
+                                                                </button>
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            )}
+
+                                        </div>
+                                    </div>
+
+                                    {/* Widget Config Section */}
+                                    <div className={`space-y-3 p-4 rounded-xl border transition-all ${isDarkMode ? 'bg-white/5 border-white/5' : 'bg-slate-50 border-slate-100'}`}>
+                                        <h4 className="text-base font-bold opacity-80 flex items-center gap-2">
+                                            <Globe size={16} className="text-indigo-500" />
+                                            组件设置
+                                        </h4>
+
+                                        {/* Pomodoro Duration */}
+                                        <div className="space-y-2">
+                                            <Label className="text-sm font-medium">番茄钟时长（分钟）</Label>
+                                            <div className="flex items-center gap-3">
+                                                <Input
+                                                    type="number"
+                                                    min={1}
+                                                    max={120}
+                                                    value={appConfig.widgetConfig?.pomodoroDuration || 25}
+                                                    onChange={(e) => setAppConfig({
+                                                        ...appConfig,
+                                                        widgetConfig: {
+                                                            ...appConfig.widgetConfig,
+                                                            pomodoroDuration: parseInt(e.target.value) || 25
+                                                        }
+                                                    })}
+                                                    className="w-24"
+                                                />
+                                                <span className="text-xs opacity-50">默认 25 分钟</span>
+                                            </div>
+                                        </div>
+
+                                        {/* World Clocks */}
+                                        <div className="space-y-2">
+                                            <div className="flex items-center justify-between">
+                                                <Label className="text-sm font-medium">世界时钟（最多6个）</Label>
+                                                <button
+                                                    onClick={() => {
+                                                        const clocks = appConfig.widgetConfig?.worldClocks || [];
+                                                        if (clocks.length < 6) {
+                                                            setAppConfig({
+                                                                ...appConfig,
+                                                                widgetConfig: {
+                                                                    ...appConfig.widgetConfig,
+                                                                    worldClocks: [...clocks, { name: '新城市', timezone: 'UTC' }]
+                                                                }
+                                                            });
+                                                        }
+                                                    }}
+                                                    disabled={(appConfig.widgetConfig?.worldClocks?.length || 0) >= 6}
+                                                    className="flex items-center gap-1 px-2 py-1 text-xs bg-indigo-500/10 text-indigo-500 rounded-lg hover:bg-indigo-500/20 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                                                >
+                                                    <Plus size={14} /> 添加
+                                                </button>
+                                            </div>
+                                            <div className="space-y-2">
+                                                {(appConfig.widgetConfig?.worldClocks || []).map((clock: { name: string; timezone: string }, i: number) => (
+                                                    <div key={i} className="flex items-center gap-2">
+                                                        <Input
+                                                            value={clock.name}
+                                                            onChange={(e) => {
+                                                                const clocks = [...(appConfig.widgetConfig?.worldClocks || [])];
+                                                                clocks[i] = { ...clocks[i], name: e.target.value };
+                                                                setAppConfig({
+                                                                    ...appConfig,
+                                                                    widgetConfig: { ...appConfig.widgetConfig, worldClocks: clocks }
+                                                                });
+                                                            }}
+                                                            placeholder="城市名"
+                                                            className="w-20"
+                                                        />
+                                                        <select
+                                                            value={clock.timezone}
+                                                            onChange={(e) => {
+                                                                const clocks = [...(appConfig.widgetConfig?.worldClocks || [])];
+                                                                clocks[i] = { ...clocks[i], timezone: e.target.value };
+                                                                setAppConfig({
+                                                                    ...appConfig,
+                                                                    widgetConfig: { ...appConfig.widgetConfig, worldClocks: clocks }
+                                                                });
+                                                            }}
+                                                            className={`flex-1 px-3 py-2 text-sm rounded-lg border transition-colors ${isDarkMode ? 'bg-slate-800 border-white/10' : 'bg-white border-slate-200'}`}
+                                                        >
+                                                            <option value="America/New_York">纽约 (UTC-5)</option>
+                                                            <option value="America/Los_Angeles">洛杉矶 (UTC-8)</option>
+                                                            <option value="America/Chicago">芝加哥 (UTC-6)</option>
+                                                            <option value="Europe/London">伦敦 (UTC+0)</option>
+                                                            <option value="Europe/Paris">巴黎 (UTC+1)</option>
+                                                            <option value="Europe/Berlin">柏林 (UTC+1)</option>
+                                                            <option value="Europe/Moscow">莫斯科 (UTC+3)</option>
+                                                            <option value="Asia/Tokyo">东京 (UTC+9)</option>
+                                                            <option value="Asia/Shanghai">上海 (UTC+8)</option>
+                                                            <option value="Asia/Hong_Kong">香港 (UTC+8)</option>
+                                                            <option value="Asia/Singapore">新加坡 (UTC+8)</option>
+                                                            <option value="Asia/Seoul">首尔 (UTC+9)</option>
+                                                            <option value="Asia/Dubai">迪拜 (UTC+4)</option>
+                                                            <option value="Australia/Sydney">悉尼 (UTC+11)</option>
+                                                            <option value="Pacific/Auckland">奥克兰 (UTC+13)</option>
+                                                            <option value="UTC">UTC</option>
+                                                        </select>
+                                                        <button
+                                                            onClick={() => {
+                                                                const clocks = [...(appConfig.widgetConfig?.worldClocks || [])];
+                                                                clocks.splice(i, 1);
+                                                                setAppConfig({
+                                                                    ...appConfig,
+                                                                    widgetConfig: { ...appConfig.widgetConfig, worldClocks: clocks }
+                                                                });
+                                                            }}
+                                                            className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-500/10 rounded-lg transition-colors"
+                                                        >
+                                                            <Trash2 size={14} />
+                                                        </button>
+                                                    </div>
+                                                ))}
+                                                {(appConfig.widgetConfig?.worldClocks?.length || 0) === 0 && (
+                                                    <p className="text-xs opacity-50 text-center py-2">暂无世界时钟，点击添加</p>
+                                                )}
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
                             )}
@@ -988,25 +1206,27 @@ export function SettingsPanel({
                                                                         {expandedCategories.includes(cat) ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
                                                                     </button>
 
-                                                                    {/* Category Color Picker */}
-                                                                    <div className="relative group/color">
-                                                                        <div
-                                                                            className="w-6 h-6 rounded-full shadow-sm cursor-pointer ring-1 ring-black/5"
-                                                                            style={{ backgroundColor: categoryColors[cat] || '#6366F1' }}></div>
-                                                                        <input
-                                                                            type="color"
-                                                                            value={categoryColors[cat] || '#6366F1'}
-                                                                            onChange={(e) => setCategoryColors({
-                                                                                ...categoryColors,
-                                                                                [cat]: e.target.value
-                                                                            })}
-                                                                            className="absolute inset-0 opacity-0 cursor-pointer"
-                                                                        />
+                                                                    <div
+                                                                        className={`pl-2 pr-4 py-1.5 rounded-2xl text-sm font-bold tracking-wide backdrop-blur-xl border-0 ring-1 ring-white/20 flex items-center gap-3 transition-all select-none
+                                                                        ${isDarkMode ? 'bg-slate-900/40 text-slate-200' : 'bg-white/60 text-slate-700'}`}
+                                                                        style={{
+                                                                            boxShadow: `0 4px 16px -4px ${categoryColors[cat] || '#6366F1'}33, inset 0 0 0 1px ${isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.5)'}`
+                                                                        }}
+                                                                    >
+                                                                        <div className="relative w-4 h-4 rounded-full shadow-[0_0_8px_currentColor] animate-pulse shrink-0 cursor-pointer hover:scale-110 transition-transform"
+                                                                            style={{ backgroundColor: categoryColors[cat] || '#6366F1' }}>
+                                                                            <input
+                                                                                type="color"
+                                                                                value={categoryColors[cat] || '#6366F1'}
+                                                                                onChange={(e) => setCategoryColors({ ...categoryColors, [cat]: e.target.value })}
+                                                                                className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                                                                            />
+                                                                        </div>
+                                                                        <span className={`${hiddenCategories.includes(cat) ? 'opacity-50 line-through decoration-2' : ''}`}>{cat}</span>
+                                                                        <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-black/5 dark:bg-white/10 opacity-70">
+                                                                            {sites.filter((s: any) => s.category === cat).length}
+                                                                        </span>
                                                                     </div>
-                                                                    <span
-                                                                        className={`text-sm ${hiddenCategories.includes(cat) ? 'opacity-50 line-through decoration-2' : 'font-medium'}`}>{cat}</span>
-                                                                    <span
-                                                                        className="text-xs px-2 py-0.5 rounded-md bg-indigo-500/10 text-indigo-500">{sites.filter((s: any) => s.category === cat).length}</span>
                                                                 </div>
                                                                 <div className="flex gap-1">
                                                                     <button onClick={() => toggleCategoryVisibility(cat)}

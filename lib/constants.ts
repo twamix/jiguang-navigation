@@ -1,7 +1,23 @@
 import {
     Globe, Github, Youtube, Twitter, Code, Briefcase, Coffee, Image as ImageIcon, Music,
-    MessageSquare, Gamepad, BookOpen, Search, Monitor, Palette, Zap, Cloud, Activity, Lock, User
+    MessageSquare, Gamepad, BookOpen, Search, Monitor, Palette, Zap, Cloud, Activity, Lock, User,
+    Linkedin, Instagram, Facebook, Twitch, Mail, Rss, MessageCircle
 } from 'lucide-react';
+
+// --- Social Icons for Footer ---
+export const SOCIAL_ICONS = [
+    { id: 'github', name: 'GitHub', icon: Github },
+    { id: 'twitter', name: 'Twitter/X', icon: Twitter },
+    { id: 'youtube', name: 'YouTube', icon: Youtube },
+    { id: 'linkedin', name: 'LinkedIn', icon: Linkedin },
+    { id: 'instagram', name: 'Instagram', icon: Instagram },
+    { id: 'facebook', name: 'Facebook', icon: Facebook },
+    { id: 'twitch', name: 'Twitch', icon: Twitch },
+    { id: 'mail', name: 'Email', icon: Mail },
+    { id: 'rss', name: 'RSS', icon: Rss },
+    { id: 'wechat', name: '微信', icon: MessageCircle },
+    { id: 'globe', name: '网站', icon: Globe },
+];
 
 // --- Fonts ---
 export const FONTS = [
@@ -75,6 +91,15 @@ export const DEFAULT_APP_CONFIG = {
     logoImage: '/logo.png',
     footerText: '© {year} JiGuang. Build your own start page.',
     footerLinks: [{ name: 'GitHub', url: 'https://github.com' }, { name: 'Privacy', url: '#' }],
+    socialLinks: [{ icon: 'github', url: 'https://github.com' }], // Default social link
+    widgetConfig: {
+        worldClocks: [
+            { name: '纽约', timezone: 'America/New_York' },
+            { name: '伦敦', timezone: 'Europe/London' },
+            { name: '东京', timezone: 'Asia/Tokyo' },
+        ],
+        pomodoroDuration: 25, // minutes
+    },
     htmlConfig: {
         header: [],
         footer: [],
@@ -124,6 +149,7 @@ export const DEFAULT_LAYOUT_SETTINGS = {
     glassOpacity: 70,
     isWideMode: false,
     showWidgets: true,
+    showNavBar: true,
     stickyHeader: true,
     stickyFooter: false,
     bgEnabled: false,
@@ -166,5 +192,6 @@ export const DEFAULT_LAYOUT_SETTINGS = {
     globalTitleFont: 'system',
     globalDescFont: 'system',
     globalTitleSize: 15, // px
-    globalDescSize: 12   // px
+    globalDescSize: 12,   // px
+    widgetStyle: 'B', // 'A' | 'B' | 'C'
 };

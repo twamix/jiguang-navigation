@@ -125,6 +125,52 @@ export async function POST(request: Request) {
             }
         }
 
+        // 5. Update Todos
+        const { todos, countdowns } = data;
+        if (todos && Array.isArray(todos)) {
+            // Optional: Strategy to wipe existing or just upsert?
+            // User request implies "recover", so let's upsert to prevent data loss on existing items if they differ.
+            // If the user wants a clean restore, they might expect a wipe. But upsert is safer.
+            for (const todo of todos) {
+                if (todo.text) {
+                    await prisma.todo.upsert({
+                        where: { id: todo.id || 'new-uuid' },
+                        update: {
+                            text: todo.text,
+                            done: todo.done,
+                            updatedAt: new Date() // Force update timestamp
+                        },
+                        create: {
+                            id: todo.id,
+                            text: todo.text,
+                            done: todo.done
+                        }
+                    }).catch(() => { });
+                }
+            }
+        }
+
+        // 6. Update Countdowns
+        if (countdowns && Array.isArray(countdowns)) {
+            for (const cd of countdowns) {
+                if (cd.label && cd.date) {
+                    await prisma.countdown.upsert({
+                        where: { id: cd.id || 'new-uuid' },
+                        update: {
+                            label: cd.label,
+                            date: cd.date,
+                            updatedAt: new Date()
+                        },
+                        create: {
+                            id: cd.id,
+                            label: cd.label,
+                            date: cd.date
+                        }
+                    }).catch(() => { });
+                }
+            }
+        }
+
         return NextResponse.json({ success: true });
     } catch (error) {
         console.error('Import failed:', error);
