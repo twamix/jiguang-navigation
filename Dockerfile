@@ -62,6 +62,8 @@ COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
 
 # 复制启动脚本
 COPY entrypoint.sh ./entrypoint.sh
+# 修复 Windows 换行符导致的 execution error
+RUN sed -i 's/\r$//' ./entrypoint.sh
 RUN chmod +x ./entrypoint.sh
 
 # 设置权限
