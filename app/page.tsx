@@ -11,7 +11,7 @@ import {
   Type, Link as LinkIcon, Layout, HardDrive, Lock, User, Users, Clock, RefreshCw, // Added Users icon
   AlertTriangle, CheckCircle2, XCircle, CloudRain, CloudSnow, CloudLightning,
   SunMedium, Wind, Image as WallpaperIcon, ImagePlus, Hash, MapPin, Sparkles, Check, Command,
-  Move, Terminal, Droplet, PaintBucket, ZoomIn, GripVertical
+  Move, Terminal, Droplet, PaintBucket, ZoomIn, GripVertical, ChevronRight
 } from 'lucide-react';
 import { AuroraBackground } from '@/app/components/AuroraBackground';
 import { FontManager } from '@/app/components/layout/FontManager';
@@ -50,7 +50,8 @@ import {
   useSensors,
   DragOverlay,
   DragStartEvent,
-  DragEndEvent
+  DragEndEvent,
+  useDroppable
 } from '@dnd-kit/core';
 import {
   arrayMove,
@@ -84,8 +85,32 @@ import {
 } from '@/lib/constants';
 
 // --- IMPORTED DATA FROM JSON ---
-const INITIAL_CATEGORIES: string[] = [];
 const INITIAL_SITES: any[] = [];
+const INITIAL_CATEGORIES: string[] = [];
+
+function DroppableHomeBreadcrumb({ onClick, isDarkMode, children }: any) {
+  const { setNodeRef, isOver } = useDroppable({
+    id: 'breadcrumb-home',
+  });
+
+  return (
+    <div
+      ref={setNodeRef}
+      onClick={onClick}
+      className={`
+        flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold transition-all duration-200 border cursor-pointer select-none
+        ${isOver
+          ? 'bg-green-100 border-green-300 text-green-700 shadow-md scale-105 ring-2 ring-green-200'
+          : (isDarkMode
+            ? 'bg-indigo-500/20 border-indigo-500/20 text-indigo-300 hover:bg-indigo-500/30 hover:border-indigo-500/40'
+            : 'bg-white border-slate-200 text-slate-600 hover:text-indigo-600 hover:border-indigo-200 hover:bg-indigo-50 hover:shadow-sm')
+        }
+      `}
+    >
+      {children}
+    </div>
+  );
+}
 
 
 export default function AuroraNav() {
@@ -106,6 +131,10 @@ export default function AuroraNav() {
     message: '',
     type: 'success'
   });
+  const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
+  const [deleteContents, setDeleteContents] = useState(false);
+  const [deleteSite, setDeleteSite] = useState<any>(null);
+  const [isConfirmationOpen, setIsConfirmationOpen] = useState(false);
   const [bingQuality, setBingQuality] = useState('uhd');
   const { allFonts } = useFonts();
 
@@ -114,6 +143,18 @@ export default function AuroraNav() {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchSuggestions, setSearchSuggestions] = useState<string[]>([]);
   const [currentEngineId, setCurrentEngineId] = useState('local');
+
+  const fetchSites = useCallback(async () => {
+    try {
+      const res = await fetch('/api/sites');
+      if (res.ok) {
+        const data = await res.json();
+        setSites(data);
+      }
+    } catch (e) {
+      console.error('Failed to fetch sites');
+    }
+  }, []);
   const [isEngineMenuOpen, setIsEngineMenuOpen] = useState(false);
   const [isSearchFocused, setIsSearchFocused] = useState(false);
   const [isScrolled, setIsScrolled] = useState(false);
@@ -130,7 +171,6 @@ export default function AuroraNav() {
   const [isWallpaperManagerOpen, setIsWallpaperManagerOpen] = useState(false);
   const [editingSite, setEditingSite] = useState<any>(null);
   const [confirmingDeleteCategory, setConfirmingDeleteCategory] = useState<string | null>(null);
-  const [confirmingDeleteSite, setConfirmingDeleteSite] = useState<any>(null);
   const [confirmingDeleteHtmlSection, setConfirmingDeleteHtmlSection] = useState<any>(null);
   const [activeSettingTab, setActiveSettingTab] = useState('layout');
   const [isGuestVerified, setIsGuestVerified] = useState(false); // 访客是否已验证密码
@@ -149,6 +189,7 @@ export default function AuroraNav() {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const syncLockRef = useRef(false); // 同步锁，防止并发写入
   const isInitializedRef = useRef(false); // 初始化标记，避免首次加载触发同步
+  const dragOriginRef = useRef<any>(null); // Track original state for drag restoration
 
   // --- Scroll Detection (Throttled) ---
   useEffect(() => {
@@ -181,6 +222,8 @@ export default function AuroraNav() {
           setSearchQuery('');
           setIsSearchFocused(false);
           searchInputRef.current?.blur();
+        } else if (currentFolderId) {
+          setCurrentFolderId(null); // Exit folder
         }
         setIsSettingsOpen(false);
         setIsModalOpen(false);
@@ -192,7 +235,7 @@ export default function AuroraNav() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isSearchFocused, contextMenu]);
+  }, [isSearchFocused, contextMenu, currentFolderId]);
 
   // --- Init & Persistence ---
   // --- Init & Persistence ---
@@ -575,6 +618,8 @@ export default function AuroraNav() {
   const handleDragStart = (event: DragStartEvent) => {
     if (!isLoggedIn) return;
     setActiveDragId(event.active.id);
+    const item = sites.find(s => s.id === event.active.id);
+    if (item) dragOriginRef.current = { ...item };
   };
 
   const handleDragEnd = async (event: DragEndEvent) => {
@@ -626,15 +671,104 @@ export default function AuroraNav() {
     const oldIndex = visualSites.findIndex((item) => String(item.id) === String(active.id));
     const newIndex = visualSites.findIndex((item) => String(item.id) === String(over.id));
 
+    // --- BREADCRUMB DROP LOGIC (Move Out) ---
+    // Note: over.id for breadcrumb is 'breadcrumb-home'. Not an index in visualSites.
+    // If over.id === 'breadcrumb-home'
+    if (over.id === 'breadcrumb-home' && currentFolderId) {
+      // Need to look up active from sites
+      const realActive = sites.find(s => s.id === active.id);
+      if (!realActive) return;
+
+      const newSites = sites.map(s => s.id === active.id ? { ...s, parentId: null } : s);
+      setSites(newSites);
+      showToast('已移出文件夹', 'success');
+
+      try {
+        await fetch('/api/sites', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...realActive, parentId: null })
+        });
+      } catch (e) {
+        showToast('移动失败', 'error');
+      }
+      return;
+    }
+
+    // --- Category Drop Logic (New) ---
+    // --- Category Drop Logic (New) ---
+    // If over is a Category (from CategoryHeader droppable)
+    if (over.data.current?.type === 'category' || categories.includes(over.id as string)) {
+      const categoryId = over.id as string;
+      const activeSite = sites.find(s => s.id === active.id);
+
+      if (activeSite) {
+        // If not already in category (DragOver didn't fire or failed?), move it.
+        // If already in category (DragOver worked), just persist.
+        let newSites = sites;
+        if (activeSite.category !== categoryId) {
+          newSites = sites.map(s => {
+            if (s.id === active.id) {
+              return { ...s, category: categoryId, parentId: null, order: 9999 }; // Append
+            }
+            return s;
+          });
+          setSites(newSites);
+        } else {
+          // Already moved by DragOver, use current sites
+          newSites = sites;
+        }
+
+        // Persist immediately
+        try {
+          await fetch('/api/sites', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(newSites)
+          });
+          showToast(`已移动到 "${categoryId}"`, 'success');
+        } catch (e) {
+          showToast('保存失败', 'error');
+        }
+        return;
+      }
+    }
+
     if (oldIndex === -1 || newIndex === -1) return;
 
     const activeItem = visualSites[oldIndex];
     const overItem = visualSites[newIndex];
 
-    // 3. Handle Category Change
+    // --- FOLDER DROP LOGIC ---
+    if (overItem.type === 'folder' && activeItem.id !== overItem.id && activeItem.type !== 'folder') {
+      const isAlreadyChild = activeItem.parentId === overItem.id;
+      if (!isAlreadyChild) {
+        // Adopt the folder's category when dropped into it
+        const updatedActive = { ...activeItem, parentId: overItem.id, category: overItem.category };
+        const newSites = sites.map(s => s.id === activeItem.id ? updatedActive : s);
+        setSites(newSites);
+        showToast(`已移动到 "${overItem.name}"`, 'success');
+
+        try {
+          await fetch('/api/sites', {
+            method: 'PUT', // Updated method per logic (assuming PUT handles updates)
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(updatedActive)
+          });
+        } catch (e) {
+          console.error("Failed to move to folder", e);
+          showToast("移动失败", "error");
+        }
+        return;
+      }
+    }
+
+    // 3. Handle Category Change (Standard Item-to-Item Drag)
     let newItem = { ...activeItem };
     if (activeTab === '全部' && activeItem.category !== overItem.category) {
       newItem.category = overItem.category;
+      // Also clear parentId if moving to a different category via item sort
+      if (newItem.parentId) newItem.parentId = null;
     }
 
     // 4. Move in Visual List
@@ -661,14 +795,50 @@ export default function AuroraNav() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(finalSites)
       });
-
-      if (!res.ok) {
-        console.error('Failed to save site order');
-        showToast('保存排序失败', 'error');
-      }
+      if (!res.ok) showToast('保存排序失败', 'error');
     } catch (error) {
-      console.error('Error saving site order:', error);
       showToast('保存排序出错', 'error');
+    }
+  };
+
+  /* DragOver Handler for Multi-Container Sorting */
+  const handleDragOver = (event: any) => {
+    const { active, over } = event;
+    if (!over) return;
+    if (active.id === over.id) return;
+
+    // 1. Handle Category Header Hover -> Optimistic Move
+    if (over.data.current?.type === 'category') {
+      const categoryId = over.id as string;
+      const activeSite = sites.find(s => s.id === active.id);
+      if (activeSite && activeSite.category !== categoryId) {
+        setSites(prev => prev.map(s =>
+          s.id === active.id
+            ? { ...s, category: categoryId, parentId: null, order: 9999 }
+            : s
+        ));
+      }
+      return;
+    }
+
+    // 2. Handle Cross-Container Sortable Item Drag
+    const activeSite = sites.find(s => s.id === active.id);
+    const overSite = sites.find(s => s.id === over.id);
+
+    if (!activeSite || !overSite) return;
+
+    // If moving between different categories (containers)
+    if (activeSite.category !== overSite.category) {
+      setSites(prev => {
+        const activeIndex = prev.findIndex(s => s.id === active.id);
+        const overIndex = prev.findIndex(s => s.id === over.id);
+
+        return prev.map(s =>
+          s.id === active.id
+            ? { ...s, category: overSite.category, parentId: null } // Adopt new category
+            : s
+        );
+      });
     }
   };
 
@@ -700,6 +870,7 @@ export default function AuroraNav() {
       // New Fields
       if (data.hiddenCategories) setHiddenCategories(data.hiddenCategories);
       if (data.theme && typeof data.theme.isDarkMode === 'boolean') setIsDarkMode(data.theme.isDarkMode);
+      if (data.searchEngine) setSearchEngine(data.searchEngine); // Restore Search Engine
 
       // Restore Custom Fonts
       if (data.customFonts && Array.isArray(data.customFonts)) {
@@ -741,18 +912,33 @@ export default function AuroraNav() {
   };
 
   const filteredSites = useMemo(() => {
-    return sites.filter(site => {
-      if (hiddenCategories.includes(site.category)) return false;
-      const matchesCategory = activeTab === '全部' || site.category === activeTab;
+    let result = sites;
 
-      // Modified: Only filter if engine is local
-      const text = (site.name + site.desc).toLowerCase();
-      const isLocalSearch = currentEngineId === 'local';
-      const matchesSearch = isLocalSearch ? text.includes(searchQuery.toLowerCase()) : true;
+    if (searchQuery) {
+      result = sites.filter((site: any) =>
+        site.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        site.url?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        site.desc?.toLowerCase().includes(searchQuery.toLowerCase())
+      );
+    } else {
+      // If not searching, filter by folder level
+      result = result.filter((s: any) => {
+        if (currentFolderId) {
+          return s.parentId === currentFolderId;
+        } else {
+          return !s.parentId;
+        }
+      });
 
-      return matchesCategory && matchesSearch;
-    });
-  }, [sites, activeTab, searchQuery, hiddenCategories, currentEngineId]);
+      if (activeTab !== '全部' && !currentFolderId) {
+        result = result.filter((site: any) => site.category === activeTab);
+      }
+    }
+
+    if (!appConfig.privateMode) return result;
+    if (isGuestVerified) return result;
+    return result.filter((site: any) => !site.isHidden);
+  }, [sites, searchQuery, activeTab, appConfig.privateMode, isGuestVerified, currentFolderId]);
 
   const activeDragSite = activeDragId ? sites.find(s => s.id === activeDragId) : null;
   const containerClass = layoutSettings.isWideMode ? 'max-w-[98%] px-6' : 'max-w-7xl px-4';
@@ -769,7 +955,7 @@ export default function AuroraNav() {
 
   return (
     <DndContext sensors={sensors} collisionDetection={closestCenter} onDragStart={handleDragStart}
-      onDragEnd={handleDragEnd}>
+      onDragEnd={handleDragEnd} onDragOver={handleDragOver}>
       <div
         ref={containerRef}
         onMouseMove={handleMouseMove}
@@ -789,213 +975,288 @@ export default function AuroraNav() {
         <Toast notification={toast} onClose={() => setToast(prev => ({ ...prev, show: false }))}
           isDarkMode={isDarkMode} />
 
-        {/* 私有模式锁定界面 */}
-        {appConfig.privateMode && !isLoggedIn && !isGuestVerified && (
-          <PrivateModeScreen
-            isDarkMode={isDarkMode}
-            onVerify={async (password: string) => {
-              try {
-                const res = await fetch('/api/auth/login', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ username: 'admin', password })
-                });
-                if (res.ok) {
-                  setIsGuestVerified(true);
-                  // Save verification state for this session
-                  if (typeof window !== 'undefined') {
-                    sessionStorage.setItem('aurora_guest_verified', 'true');
-                  }
-                  return true;
-                }
-                return false;
-              } catch {
-                return false;
-              }
-            }}
-            appConfig={appConfig}
-          />
-        )}
-
-
-
-        <div
-          className={`fixed inset-0 z-40 bg-black/50 backdrop-blur-[2px] transition-all duration-300 ease-out ${isSearchFocused ? 'opacity-100 visible' : 'opacity-0 invisible pointer-events-none'}`}
-          onClick={() => setIsSearchFocused(false)} />
-
-        {/* Header - Scroll Aware & Optimized */}
-        <Header
-          isDarkMode={isDarkMode}
-          setIsDarkMode={setIsDarkMode}
-          layoutSettings={layoutSettings}
-          isScrolled={isScrolled}
-          appConfig={appConfig}
-          searchQuery={searchQuery}
-          setSearchQuery={setSearchQuery}
-          isSearchFocused={isSearchFocused}
-          setIsSearchFocused={setIsSearchFocused}
-          searchInputRef={searchInputRef}
-          handleSearchChange={handleSearchChange}
-          currentEngineId={currentEngineId}
-          setCurrentEngineId={setCurrentEngineId}
-          isEngineMenuOpen={isEngineMenuOpen}
-          setIsEngineMenuOpen={setIsEngineMenuOpen}
-          searchSuggestions={searchSuggestions}
-          setSearchSuggestions={setSearchSuggestions}
-          isLoggedIn={isLoggedIn}
-          setIsLoggedIn={setIsLoggedIn}
-          setEditingSite={setEditingSite}
-          setIsModalOpen={setIsModalOpen}
-          isSettingsOpen={isSettingsOpen}
-          setIsSettingsOpen={setIsSettingsOpen}
-          setIsAccountSettingsModalOpen={setIsAccountSettingsModalOpen}
-          setIsLoginModalOpen={setIsLoginModalOpen}
-        />
-
-        {/* Content Container */}
-        <div
-          className={`mx-auto w-full transition-all duration-300 flex-1 ${containerClass} ${layoutSettings.stickyHeader ? 'pt-28' : ''} ${layoutSettings.stickyFooter ? 'pb-28' : ''}`}>
-          {layoutSettings.showWidgets && !isSearching && (
-            <div className={layoutSettings.compactMode ? 'mb-4 mt-2' : 'mb-8 mt-4'}>
-              <WidgetDashboard isDarkMode={isDarkMode} sitesCount={sites.length} />
+        {/* 私有模式锁定界面 - Prevent Flash: Show if configured OR if loading (security first) ?? No, if loading, we don't know configuration.
+            If we show lock on loading, it flashes lock for everyone.
+            Solution: If isLoading, show specific Loading State.
+            If !isLoading && privateMode, show Lock.
+            If !isLoading && !privateMode, show Content.
+         */}
+        {isLoading ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-50 dark:bg-slate-900 transition-opacity">
+            <div className="flex flex-col items-center gap-4 animate-in fade-in duration-700">
+              <div className="w-12 h-12 rounded-full border-4 border-indigo-500/30 border-t-indigo-500 animate-spin" />
+              <p className="text-sm font-medium opacity-50 animate-pulse">正在加载配置...</p>
             </div>
-          )}
-
-          {/* HTML5 Content Section - Header Bottom */}
-          <div className={`w-full ${layoutSettings.compactMode ? 'mb-4' : 'mb-8'} flex ${appConfig.htmlConfig?.headerLayout === 'row' ? 'flex-row flex-wrap justify-center gap-4' : 'flex-col items-center gap-4'}`}>
-            <SortableContext items={(appConfig.htmlConfig?.header || []).map((s: any) => s.id)} strategy={verticalListSortingStrategy}>
-              {(appConfig.htmlConfig?.header || []).map((section: any, idx: number) => (
-                <SortableHtmlSection key={section.id || `header-${idx}`} config={section} isDarkMode={isDarkMode} isLoggedIn={isLoggedIn} onContextMenu={handleHtmlContextMenu} />
-              ))}
-            </SortableContext>
           </div>
-
-          {/* Category Tabs */}
-          <nav
-            className={`sticky z-30 w-full ${layoutSettings.compactMode ? 'mb-4' : 'mb-8'} transition-all duration-500 ease-[cubic-bezier(0.4,0,0.2,1)] ${isScrolled ? 'top-[4.5rem]' : 'top-[5.5rem]'}`}>
-            <div className="flex justify-center">
-              <div
-                className={`relative flex items-center p-1.5 rounded-full overflow-x-auto custom-scrollbar max-w-full backdrop-blur-xl border shadow-2xl shadow-indigo-500/10 ${isDarkMode ? 'bg-slate-900/80 border-white/10' : 'bg-white/70 border-white/60 ring-1 ring-white/60'}`}>
-                <CategoryPill
-                  label="全部"
-                  active={activeTab === '全部'}
-                  onClick={() => setActiveTab('全部')}
-                  isDarkMode={isDarkMode}
-                  color={getCategoryColor('全部')}
-                  navColorMode={layoutSettings.navColorMode}
-                />
-                <div
-                  className={`w-px h-5 mx-1 shrink-0 ${isDarkMode ? 'bg-white/10' : 'bg-slate-400/30'}`}></div>
-                {categories.filter(cat => !hiddenCategories.includes(cat)).map(cat => (
-                  <CategoryPill
-                    key={cat}
-                    label={cat}
-                    active={activeTab === cat}
-                    onClick={() => setActiveTab(cat)}
-                    isDarkMode={isDarkMode}
-                    color={getCategoryColor(cat)}
-                    navColorMode={layoutSettings.navColorMode}
-                    settings={layoutSettings}
-                  />
-                ))}
-              </div>
-            </div>
-          </nav>
-
-          {/* Main Grid */}
-          <main className="relative min-h-[40vh] pb-10">
-            {isLoggedIn && isSettingsOpen && (
-              <SettingsPanel
+        ) : (
+          <>
+            {appConfig.privateMode && !isLoggedIn && !isGuestVerified ? (
+              <PrivateModeScreen
                 isDarkMode={isDarkMode}
-                onClose={() => setIsSettingsOpen(false)}
-                isWallpaperManagerOpen={isWallpaperManagerOpen}
-                setIsWallpaperManagerOpen={setIsWallpaperManagerOpen}
-                activeTab={activeSettingTab}
-                setActiveTab={setActiveSettingTab}
-                layoutSettings={layoutSettings}
-                setLayoutSettings={setLayoutSettings}
-                categories={categories}
-                categoryColors={categoryColors}
-                setCategoryColors={setCategoryColors}
-                hiddenCategories={hiddenCategories}
-                toggleCategoryVisibility={(c: string) => setHiddenCategories(prev => prev.includes(c) ? prev.filter(x => x !== c) : [...prev, c])}
-                handleDeleteCategory={(c: string) => setConfirmingDeleteCategory(c)}
-                handleAddCategory={async (n: string) => {
-                  const name = n.trim();
-                  if (!name) return;
-                  if (categories.includes(name)) {
-                    showToast('分类已存在', 'error');
-                    return;
-                  }
+                onVerify={async (password: string) => {
                   try {
-                    const res = await fetch('/api/categories', {
+                    const res = await fetch('/api/auth/private/verify', {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ name, order: categories.length })
+                      body: JSON.stringify({ password })
                     });
                     if (res.ok) {
-                      setCategories([...categories, name]);
-                      showToast('分类添加成功');
-                    } else {
-                      showToast('添加失败', 'error');
+                      const data = await res.json();
+                      if (data.success) {
+                        setIsGuestVerified(true);
+                        if (typeof window !== 'undefined') {
+                          sessionStorage.setItem('aurora_guest_verified', 'true');
+                        }
+                        return true;
+                      }
                     }
-                  } catch (e) {
-                    showToast('添加失败', 'error');
+                    return false;
+                  } catch {
+                    return false;
                   }
                 }}
-                sites={sites}
-                setSites={setSites}
-                setCategories={setCategories}
-                moveCategory={moveCategory}
-                handleImportData={handleImportData}
                 appConfig={appConfig}
-                setAppConfig={setAppConfig}
-                showToast={showToast}
-                setBingWallpaper={setBingWallpaper}
-                setIsModalOpen={setIsModalOpen}
-                setEditingSite={setEditingSite}
-                onDeleteSite={(site: any) => setConfirmingDeleteSite(site)}
               />
+            ) : (
+              <>
+                {/* Overlay */}
+                <div
+                  className={`fixed inset-0 z-40 bg-black/50 backdrop-blur-[2px] transition-all duration-300 ease-out ${isSearchFocused ? 'opacity-100 visible' : 'opacity-0 invisible pointer-events-none'}`}
+                  onClick={() => setIsSearchFocused(false)} />
+
+                {/* Header */}
+                <Header
+                  isDarkMode={isDarkMode}
+                  setIsDarkMode={setIsDarkMode}
+                  layoutSettings={layoutSettings}
+                  isScrolled={isScrolled}
+                  appConfig={appConfig}
+                  searchQuery={searchQuery}
+                  setSearchQuery={setSearchQuery}
+                  isSearchFocused={isSearchFocused}
+                  setIsSearchFocused={setIsSearchFocused}
+                  searchInputRef={searchInputRef}
+                  handleSearchChange={handleSearchChange}
+                  currentEngineId={currentEngineId}
+                  setCurrentEngineId={setCurrentEngineId}
+                  isEngineMenuOpen={isEngineMenuOpen}
+                  setIsEngineMenuOpen={setIsEngineMenuOpen}
+                  searchSuggestions={searchSuggestions}
+                  setSearchSuggestions={setSearchSuggestions}
+                  isLoggedIn={isLoggedIn}
+                  setIsLoggedIn={setIsLoggedIn}
+                  setEditingSite={setEditingSite}
+                  setIsModalOpen={setIsModalOpen}
+                  isSettingsOpen={isSettingsOpen}
+                  setIsSettingsOpen={setIsSettingsOpen}
+                  setIsAccountSettingsModalOpen={setIsAccountSettingsModalOpen}
+                  setIsLoginModalOpen={setIsLoginModalOpen}
+                />
+
+                {/* Content Container */}
+                <div
+                  className={`mx-auto w-full transition-all duration-300 flex-1 ${containerClass} ${layoutSettings.stickyHeader ? 'pt-28' : ''} ${layoutSettings.stickyFooter ? 'pb-28' : ''}`}>
+                  {!isLoading && layoutSettings.showWidgets && !isSearching && (
+                    <div className={layoutSettings.compactMode ? 'mb-4 mt-2' : 'mb-8 mt-4'}>
+                      <WidgetDashboard isDarkMode={isDarkMode} sitesCount={sites.length} widgetStyle={layoutSettings.widgetStyle as "A" | "B" | "C"} widgetConfig={appConfig.widgetConfig} />
+                    </div>
+                  )}
+
+                  {/* HTML5 Content Section - Header Bottom */}
+                  <div className={`w-full ${layoutSettings.compactMode ? 'mb-4' : 'mb-8'} flex ${appConfig.htmlConfig?.headerLayout === 'row' ? 'flex-row flex-wrap justify-center gap-4' : 'flex-col items-center gap-4'}`}>
+                    <SortableContext items={(appConfig.htmlConfig?.header || []).map((s: any) => s.id)} strategy={verticalListSortingStrategy}>
+                      {(appConfig.htmlConfig?.header || []).map((section: any, idx: number) => (
+                        <SortableHtmlSection key={section.id || `header-${idx}`} config={section} isDarkMode={isDarkMode} isLoggedIn={isLoggedIn} onContextMenu={handleHtmlContextMenu} />
+                      ))}
+                    </SortableContext>
+                  </div>
+
+                  {/* Category Tabs */}
+                  {!isLoading && (layoutSettings.showNavBar ?? true) && (
+                    <nav
+                      className={`sticky z-30 w-full ${layoutSettings.compactMode ? 'mb-4' : 'mb-8'} transition-all duration-500 ease-[cubic-bezier(0.4,0,0.2,1)] ${isScrolled ? 'top-[4.5rem]' : 'top-[5.5rem]'}`}>
+                      <div className="flex justify-center">
+                        <div
+                          onMouseMove={(e) => {
+                            const bounds = e.currentTarget.getBoundingClientRect();
+                            e.currentTarget.style.setProperty('--mouse-x', `${e.clientX - bounds.left}px`);
+                            e.currentTarget.style.setProperty('--mouse-y', `${e.clientY - bounds.top}px`);
+                          }}
+                          className={`group/nav relative flex items-center gap-4 p-2 rounded-full overflow-hidden custom-scrollbar max-w-full backdrop-blur-2xl shadow-2xl shadow-indigo-500/10 ${isDarkMode ? 'bg-slate-900/60 ring-1 ring-white/10' : 'bg-white/60 ring-1 ring-white/60'}`}>
+
+                          {/* Spotlight Effect */}
+                          <div className={`pointer-events-none absolute -inset-px rounded-full opacity-0 transition-opacity duration-300 group-hover/nav:opacity-100 ${isDarkMode ? 'mix-blend-overlay' : 'mix-blend-multiply'}`}
+                            style={{
+                              background: `radial-gradient(600px circle at var(--mouse-x) var(--mouse-y), ${isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(99,102,241,0.05)'}, transparent 40%)`
+                            }}
+                          />
+
+                          <CategoryPill
+                            label="全部"
+                            active={activeTab === '全部'}
+                            onClick={() => setActiveTab('全部')}
+                            isDarkMode={isDarkMode}
+                            color={getCategoryColor('全部')}
+                            navColorMode={layoutSettings.navColorMode}
+                          />
+                          <div
+                            className={`w-px h-5 shrink-0 ${isDarkMode ? 'bg-white/10' : 'bg-slate-400/20'}`}></div>
+                          {categories.filter(cat => !hiddenCategories.includes(cat)).map(cat => (
+                            <CategoryPill
+                              key={cat}
+                              label={cat}
+                              active={activeTab === cat}
+                              onClick={() => setActiveTab(cat)}
+                              isDarkMode={isDarkMode}
+                              color={getCategoryColor(cat)}
+                              navColorMode={layoutSettings.navColorMode}
+                              settings={layoutSettings}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    </nav>
+                  )}
+
+                  {/* Main Grid */}
+                  <main className="relative min-h-[40vh] pb-10">
+                    {isLoggedIn && isSettingsOpen && (
+                      <SettingsPanel
+                        isDarkMode={isDarkMode}
+                        onClose={() => setIsSettingsOpen(false)}
+                        isWallpaperManagerOpen={isWallpaperManagerOpen}
+                        setIsWallpaperManagerOpen={setIsWallpaperManagerOpen}
+                        activeTab={activeSettingTab}
+                        setActiveTab={setActiveSettingTab}
+                        searchEngine={searchEngine} // [NEW] Pass searchEngine
+                        layoutSettings={layoutSettings}
+                        setLayoutSettings={setLayoutSettings}
+                        categories={categories}
+                        categoryColors={categoryColors}
+                        setCategoryColors={setCategoryColors}
+                        hiddenCategories={hiddenCategories}
+                        toggleCategoryVisibility={(c: string) => setHiddenCategories(prev => prev.includes(c) ? prev.filter(x => x !== c) : [...prev, c])}
+                        handleDeleteCategory={(c: string) => setConfirmingDeleteCategory(c)}
+                        handleAddCategory={async (n: string) => {
+                          const name = n.trim();
+                          if (!name) return;
+                          if (categories.includes(name)) {
+                            showToast('分类已存在', 'error');
+                            return;
+                          }
+                          try {
+                            const res = await fetch('/api/categories', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ name, order: categories.length })
+                            });
+                            if (res.ok) {
+                              setCategories([...categories, name]);
+                              showToast('分类添加成功');
+                            } else {
+                              showToast('添加失败', 'error');
+                            }
+                          } catch (e) {
+                            showToast('添加失败', 'error');
+                          }
+                        }}
+                        sites={sites}
+                        setSites={setSites}
+                        setCategories={setCategories}
+                        moveCategory={moveCategory}
+                        handleImportData={handleImportData}
+                        appConfig={appConfig}
+                        setAppConfig={setAppConfig}
+                        showToast={showToast}
+                        setBingWallpaper={setBingWallpaper}
+                        setIsModalOpen={setIsModalOpen}
+                        setEditingSite={setEditingSite}
+                        onDeleteSite={(site: any) => {
+                          setDeleteSite(site);
+                          setDeleteContents(false);
+                          setIsConfirmationOpen(true);
+                        }}
+                      />
+                    )}
+
+                    {/* Site Grid */}
+                    <div className={layoutSettings.compactMode ? 'space-y-4' : 'space-y-10'}>
+                      {/* Breadcrumbs for Folder Navigation */}
+                      {currentFolderId && (
+                        <div className="mb-4 flex items-center gap-2 text-sm animate-in slide-in-from-left-2 fade-in duration-300">
+
+                          <DroppableHomeBreadcrumb
+                            onClick={() => setCurrentFolderId(null)}
+                            isDarkMode={isDarkMode}
+                          >
+                            <HardDrive size={14} className="mr-1.5" /> 首页
+                          </DroppableHomeBreadcrumb>
+
+                          {(() => {
+                            // Simple breadcrumb for 1 level deep for now
+                            const currentFolder = sites.find(s => s.id === currentFolderId);
+                            return (
+                              <>
+                                <ChevronRight size={14} className="text-slate-400 opacity-60" />
+                                <div className={`px-3 py-1.5 rounded-full text-xs font-bold border select-none transition-colors
+                                    ${isDarkMode
+                                    ? 'bg-white/5 border-white/5 text-slate-200 shadow-sm'
+                                    : 'bg-white border-slate-200 text-slate-700 shadow-sm'
+                                  }`}>
+                                  {currentFolder?.name || 'Folder'}
+                                </div>
+                              </>
+                            );
+                          })()}
+                        </div>
+                      )}
+
+                      <SiteGrid
+                        isLoading={isLoading}
+                        filteredSites={filteredSites}
+                        isSearching={!!searchQuery}
+                        activeTab={activeTab}
+                        categories={categories}
+                        hiddenCategories={hiddenCategories}
+                        layoutSettings={layoutSettings}
+                        isDarkMode={isDarkMode}
+                        isLoggedIn={isLoggedIn}
+                        onEdit={(site: any) => {
+                          setEditingSite(site);
+                          setIsModalOpen(true);
+                        }}
+                        onDelete={(site: any) => {
+                          setDeleteSite(site);
+                          setDeleteContents(false);
+                          setIsConfirmationOpen(true);
+                        }}
+                        onContextMenu={handleContextMenu}
+                        getCategoryColor={getCategoryColor}
+                        onFolderClick={(folder: any) => setCurrentFolderId(folder.id)}
+                        sites={sites} // Pass sites for folder count
+                      />
+                    </div>
+                  </main>
+
+                  {/* HTML5 Content Section - Footer Top */}
+                  <div className={`w-full mb-8 flex ${appConfig.htmlConfig?.footerLayout === 'row' ? 'flex-row flex-wrap justify-center gap-4' : 'flex-col items-center gap-4'}`}>
+                    <SortableContext items={(appConfig.htmlConfig?.footer || []).map((s: any) => s.id)} strategy={verticalListSortingStrategy}>
+                      {(appConfig.htmlConfig?.footer || []).map((section: any, idx: number) => (
+                        <SortableHtmlSection key={section.id || `footer-${idx}`} config={section} isDarkMode={isDarkMode} isLoggedIn={isLoggedIn} onContextMenu={handleHtmlContextMenu} />
+                      ))}
+                    </SortableContext>
+                  </div>
+                </div>
+
+                <Footer isDarkMode={isDarkMode} appConfig={appConfig} isSticky={layoutSettings.stickyFooter} />
+              </>
             )}
+          </>
+        )}
 
-            {/* Site Grid */}
-            <div className={layoutSettings.compactMode ? 'space-y-4' : 'space-y-10'}>
-              <SiteGrid
-                isLoading={isLoading}
-                filteredSites={filteredSites}
-                isSearching={isSearching}
-                activeTab={activeTab}
-                categories={categories}
-                hiddenCategories={hiddenCategories}
-                layoutSettings={layoutSettings}
-                isDarkMode={isDarkMode}
-                isLoggedIn={isLoggedIn}
-                onEdit={(site: any) => {
-                  setEditingSite(site);
-                  setIsModalOpen(true);
-                }}
-                onDelete={(site: any) => setConfirmingDeleteSite(site)}
-                onContextMenu={handleContextMenu}
-                getCategoryColor={getCategoryColor}
-              />
-            </div>
-          </main>
-
-          {/* HTML5 Content Section - Footer Top */}
-          <div className={`w-full mb-8 flex ${appConfig.htmlConfig?.footerLayout === 'row' ? 'flex-row flex-wrap justify-center gap-4' : 'flex-col items-center gap-4'}`}>
-            <SortableContext items={(appConfig.htmlConfig?.footer || []).map((s: any) => s.id)} strategy={verticalListSortingStrategy}>
-              {(appConfig.htmlConfig?.footer || []).map((section: any, idx: number) => (
-                <SortableHtmlSection key={section.id || `footer-${idx}`} config={section} isDarkMode={isDarkMode} isLoggedIn={isLoggedIn} onContextMenu={handleHtmlContextMenu} />
-              ))}
-            </SortableContext>
-          </div>
-        </div>
-
-        <Footer isDarkMode={isDarkMode} appConfig={appConfig} isSticky={layoutSettings.stickyFooter} />
-
-        <DragOverlay adjustScale style={{ transformOrigin: '0 0 ' }}>
+        <DragOverlay style={{ transformOrigin: '0 0 ' }}>
           {activeDragSite ? (
-            <div style={{ width: '100%', height: layoutSettings.cardHeight }}>
+            <div style={{ width: parseInt(String(layoutSettings.cardWidth || 260)), height: layoutSettings.cardHeight }}>
               <SiteCard site={activeDragSite} isLoggedIn={false} isDarkMode={isDarkMode}
                 settings={layoutSettings} isOverlay />
             </div>
@@ -1071,9 +1332,32 @@ export default function AuroraNav() {
               className={`w-full text-left px-4 py-2.5 text-sm flex items-center gap-2 active:scale-95 transition-transform ${isDarkMode ? 'hover:bg-white/10' : 'hover:bg-slate-50'}`}>
               <Copy size={14} />复制链接
             </button>
+            {currentFolderId && (
+              <button onClick={async () => {
+                const siteId = contextMenu.siteId;
+                if (!siteId) return;
+                const site = sites.find(s => s.id === siteId);
+                // Optimistic
+                setSites(prev => prev.map(s => s.id === siteId ? { ...s, parentId: null } : s));
+                setContextMenu({ ...contextMenu, visible: false });
+                showToast('已移出文件夹', 'success');
+                try {
+                  await fetch('/api/sites', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ...site, parentId: null })
+                  });
+                } catch (e) { showToast('移动失败', 'error'); }
+              }}
+                className={`w-full text-left px-4 py-2.5 text-sm flex items-center gap-2 active:scale-95 transition-transform ${isDarkMode ? 'hover:bg-white/10' : 'hover:bg-slate-50'}`}>
+                <ArrowUp size={14} />移出文件夹
+              </button>
+            )}
             <div className={`h-px my-1 ${isDarkMode ? 'bg-white/10' : 'bg-slate-100'}`}></div>
             <button onClick={() => {
-              setConfirmingDeleteSite(sites.find(s => s.id === contextMenu.siteId));
+              setDeleteSite(sites.find(s => s.id === contextMenu.siteId));
+              setDeleteContents(false);
+              setIsConfirmationOpen(true);
               setContextMenu({ ...contextMenu, visible: false });
             }}
               className="w-full text-left px-4 py-2.5 text-sm flex items-center gap-2 text-red-500 hover:bg-red-500/10 active:scale-95 transition-transform">
@@ -1082,7 +1366,7 @@ export default function AuroraNav() {
           </div>
         )}
         <AnimatePresence>
-          {isModalOpen && <EditModal key="edit-modal" site={editingSite} categories={categories} isDarkMode={isDarkMode} settings={layoutSettings}
+          {isModalOpen && <EditModal key="edit-modal" site={editingSite} categories={categories} sites={sites} isDarkMode={isDarkMode} settings={layoutSettings}
             onClose={() => setIsModalOpen(false)} onSave={async (data: any) => {
 
               try {
@@ -1136,22 +1420,46 @@ export default function AuroraNav() {
               showToast('删除请求失败', 'error');
             }
           }} />}
-        {confirmingDeleteSite && <ConfirmationModal isOpen={true} title="删除站点"
-          message={`确定要删除 "${confirmingDeleteSite.name}" 吗？`}
-          isDarkMode={isDarkMode}
-          onCancel={() => setConfirmingDeleteSite(null)}
+
+        <ConfirmationModal
+          isOpen={isConfirmationOpen}
+          onCancel={() => setIsConfirmationOpen(false)}
           onConfirm={async () => {
-            try {
-              const res = await fetch(`/api/sites?id=${confirmingDeleteSite.id}`, { method: 'DELETE' });
-              if (res.ok) {
-                setSites(prev => prev.filter(s => s.id !== confirmingDeleteSite.id));
-                setConfirmingDeleteSite(null);
-                showToast('站点已删除', 'success');
-              } else showToast('删除失败', 'error');
-            } catch (e) {
-              showToast('删除失败', 'error');
+            if (deleteSite) {
+              try {
+                const res = await fetch(`/api/sites?id=${deleteSite.id}&deleteContents=${deleteContents}`, { method: 'DELETE' });
+                if (res.ok) {
+                  // Optimistic update:
+                  // 1. Remove the deleted site/folder
+                  // 2. If it was a folder and we kept contents, move children to root (parentId = null)
+                  setSites(prev => {
+                    const filtered = prev.filter(s => s.id !== deleteSite.id);
+                    if (deleteSite.type === 'folder' && !deleteContents) {
+                      return filtered.map(s => s.parentId === deleteSite.id ? { ...s, parentId: null } : s);
+                    }
+                    return filtered;
+                  });
+                  await fetchSites();
+                  showToast('已删除', 'success');
+                } else {
+                  showToast('删除失败', 'error');
+                }
+              } catch (error) {
+                console.error('Delete failed', error);
+                showToast('请求出错', 'error');
+              }
             }
-          }} />}
+            setIsConfirmationOpen(false);
+            setDeleteSite(null);
+          }}
+          isDarkMode={isDarkMode}
+          isDeletingFolder={deleteSite?.type === 'folder'}
+          deleteContents={deleteContents}
+          setDeleteContents={setDeleteContents}
+          title={deleteSite?.type === 'folder' ? '删除文件夹' : undefined}
+          message={deleteSite?.type === 'folder' ? '要删除这个文件夹吗？' : undefined}
+          confirmText={deleteSite?.type === 'folder' ? '确定删除' : undefined}
+        />
         {confirmingDeleteHtmlSection && <ConfirmationModal isOpen={true} title="删除区域"
           message="确定要删除此 HTML 内容区域吗？操作无法撤销。"
           isDarkMode={isDarkMode}

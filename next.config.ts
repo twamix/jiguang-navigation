@@ -12,8 +12,12 @@ const nextConfig: NextConfig = {
       { protocol: 'https', hostname: '**' },             // Allow all https for user custom
     ],
     dangerouslyAllowSVG: true,
-    contentSecurityPolicy: "default-src 'self'; script-src 'none'; sandbox;",
+  },
+
+  turbopack: {
+    root: __dirname,
   },
 };
+
 
 export default nextConfig;

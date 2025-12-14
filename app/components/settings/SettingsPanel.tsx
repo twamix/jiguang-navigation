@@ -3,13 +3,16 @@ import {
     Palette, ImageIcon, Layout, Globe, List, Settings, X, Type, ZoomIn, CheckCircle2,
     PaintBucket, ImagePlus, RefreshCw, UploadCloud, Move, Lock, Code, Plus, Trash2,
     HardDrive, Download, EyeOff, Eye, ArrowUp, ArrowDown, GripVertical, Image as WallpaperIcon,
-    Sparkles, MousePointer2, Hand, LayoutList, Layers, ExternalLink, ChevronRight, ChevronDown // Added icons
+    Sparkles, MousePointer2, Hand, LayoutList, Layers, ExternalLink, ChevronRight, ChevronDown, Share2,
+    Edit3, Check
 } from 'lucide-react';
 import {
     DndContext,
     closestCenter,
     KeyboardSensor,
     PointerSensor,
+    MouseSensor,
+    TouchSensor,
     useSensor,
     useSensors,
     DragEndEvent
@@ -33,7 +36,7 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 
-import { FONTS, FRESH_BACKGROUND_COLORS } from '@/lib/constants';
+import { FONTS, FRESH_BACKGROUND_COLORS, SOCIAL_ICONS } from '@/lib/constants';
 import { RangeControl } from '@/app/components/ui/RangeControl';
 import { NewCategoryInput } from '@/app/components/settings/NewCategoryInput';
 import { BackgroundPositionPreview } from '@/app/components/settings/BackgroundPositionPreview';
@@ -73,6 +76,7 @@ interface SettingsPanelProps {
     setIsModalOpen: (isOpen: boolean) => void;
     setEditingSite: (site: any) => void;
     onDeleteSite: (site: any) => void;
+    searchEngine: string; // [NEW] Added for export
 }
 
 export function SettingsPanel({
@@ -98,6 +102,7 @@ export function SettingsPanel({
     setAppConfig,
     showToast,
     isWallpaperManagerOpen,
+    searchEngine, // [NEW] Destructure prop
     setIsWallpaperManagerOpen,
     setBingWallpaper,
     setIsModalOpen,
@@ -119,16 +124,142 @@ export function SettingsPanel({
     const [isFontPickerOpen, setIsFontPickerOpen] = useState(false);
     const [fontToDelete, setFontToDelete] = useState<any>(null);
 
+    const [renamingCategory, setRenamingCategory] = useState<string | null>(null);
+    const [renameValue, setRenameValue] = useState('');
+
+    const handleRename = async () => {
+        if (!renamingCategory || !renameValue.trim() || renamingCategory === renameValue.trim()) {
+            setRenamingCategory(null);
+            return;
+        }
+        const oldName = renamingCategory;
+        const newName = renameValue.trim();
+
+        if (categories.includes(newName)) {
+            showToast('分类名称已存在', 'error');
+            return;
+        }
+
+        try {
+            const res = await fetch('/api/categories', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ oldName, newName })
+            });
+
+            if (res.ok) {
+                // Update Categories List
+                setCategories(categories.map(c => c === oldName ? newName : c));
+
+                // Update Sites
+                setSites(sites.map(s => s.category === oldName ? { ...s, category: newName } : s));
+
+                // Update Colors
+                if (categoryColors[oldName]) {
+                    const newColors = { ...categoryColors };
+                    newColors[newName] = newColors[oldName];
+                    delete newColors[oldName];
+                    setCategoryColors(newColors);
+                }
+
+                setRenamingCategory(null);
+                showToast('分类重命名成功');
+            } else {
+                showToast('重命名失败', 'error');
+            }
+        } catch (e) {
+            showToast('请求失败', 'error');
+        }
+    };
+
     const sensors = useSensors(
-        useSensor(PointerSensor, {
+        useSensor(MouseSensor, {
             activationConstraint: {
                 distance: 8,
+            },
+        }),
+        useSensor(TouchSensor, {
+            activationConstraint: {
+                delay: 250,
+                tolerance: 5,
             },
         }),
         useSensor(KeyboardSensor, {
             coordinateGetter: sortableKeyboardCoordinates,
         })
     );
+
+    const handleDragOver = (event: any) => {
+        const { active, over } = event;
+        if (!over) return;
+        if (active.id === over.id) return;
+
+        const isCategory = (id: any) => categories.includes(id);
+
+        // Site sorting/nesting logic
+        if (isCategory(over.id) && !isCategory(active.id)) {
+            // Dragging a site over a Category Header -> Move to Root of that Category
+            const activeSite = sites.find(s => s.id === active.id);
+            // Allow moving ANY site to this category (unless it's already a root site there)
+            if (activeSite && (activeSite.category !== over.id || activeSite.parentId)) {
+                const newItems = sites.map(s => s.id === activeSite.id ? { ...s, parentId: null, category: over.id } : s);
+                setSites(newItems);
+            }
+        }
+
+        if (!isCategory(active.id) && !isCategory(over.id)) {
+            const activeSite = sites.find(s => s.id === active.id);
+            const overSite = sites.find(s => s.id === over.id);
+
+            if (!activeSite || !overSite) return;
+
+            // 1. Moving into a Folder
+            if (overSite.type === 'folder' && activeSite.type !== 'folder') {
+                // If hovering over a folder, move inside
+                if (activeSite.parentId !== overSite.id) {
+                    const newItems = sites.map(s => {
+                        if (s.id === activeSite.id) {
+                            return { ...s, parentId: overSite.id, category: overSite.category, order: 9999 }; // Append to end temporarily
+                        }
+                        return s;
+                    });
+                    setSites(newItems);
+                }
+            }
+
+            // 2. Moving out of Folder (to Root of Category) logic is tricky in List view.
+
+            // If overSite is Root and activeSite is Nested -> Move to Root (Same level as overSite).
+            if (!overSite.parentId && activeSite.parentId) {
+                // Move activeSite to Root (parentId: null)
+                const newItems = sites.map(s => s.id === activeSite.id ? { ...s, parentId: null, category: overSite.category } : s);
+                setSites(newItems);
+            }
+
+            // If overSite is Nested and activeSite is Root -> Move to Folder (Same level as overSite).
+            if (overSite.parentId && !activeSite.parentId) {
+                const newItems = sites.map(s => s.id === activeSite.id ? { ...s, parentId: overSite.parentId, category: overSite.category } : s);
+                setSites(newItems);
+            }
+
+            // If both nested in different folders?
+            if (activeSite.parentId && overSite.parentId && activeSite.parentId !== overSite.parentId) {
+                const newItems = sites.map(s => s.id === activeSite.id ? { ...s, parentId: overSite.parentId, category: overSite.category } : s);
+                setSites(newItems);
+            }
+
+            // [FIX] Cross-Category Drag (Root to Root)
+            // If dragging from one category to another (and both are root items, or we decide to flatten)
+            if (activeSite.category !== overSite.category) {
+                // If overSite is in a folder, we already handled it above (Moving into Folder or Same Folder Level).
+                // If overSite is Root, we just switch category.
+                if (!overSite.parentId) {
+                    const newItems = sites.map(s => s.id === activeSite.id ? { ...s, category: overSite.category, parentId: null } : s);
+                    setSites(newItems);
+                }
+            }
+        }
+    };
 
     const handleDragEnd = (event: DragEndEvent) => {
         const { active, over } = event;
@@ -137,22 +268,59 @@ export function SettingsPanel({
         const isCategory = (id: any) => categories.includes(id);
 
         if (active.id !== over.id) {
+            // Category Reordering
             if (isCategory(active.id) && isCategory(over.id)) {
                 const oldIndex = categories.indexOf(active.id as string);
                 const newIndex = categories.indexOf(over.id as string);
                 moveCategory(oldIndex, newIndex);
-            } else if (!isCategory(active.id) && !isCategory(over.id)) {
-                const oldIndex = sites.findIndex(s => s.id === active.id);
-                const newIndex = sites.findIndex(s => s.id === over.id);
+                // Note: Persistence for category order is handled by `moveCategory` if it updates a persistent state.
+                // If categories are derived from sites, then site reordering will implicitly affect category order.
+                return;
+            }
+
+            // Site Reordering
+            if (!isCategory(active.id) && !isCategory(over.id)) {
+
+                const oldIndex = sites.findIndex((item) => item.id === active.id);
+                const newIndex = sites.findIndex((item) => item.id === over.id);
 
                 if (oldIndex !== -1 && newIndex !== -1) {
-                    const newSites = arrayMove(sites, oldIndex, newIndex);
-                    const updatedSites = newSites.map((site, index) => ({ ...site, order: index }));
-                    setSites(updatedSites);
+                    const reordered = arrayMove(sites, oldIndex, newIndex).map((site: any, index: number) => ({
+                        ...site,
+                        order: index // Update order based on new position
+                    }));
+
+                    setSites(reordered);
+
+                    // Persist immediately
+                    fetch('/api/sites', {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(reordered)
+                    }).catch(e => {
+                        showToast('排序保存失败', 'error');
+                        console.error(e);
+                    });
                 }
+            }
+
+            // Site dropped on Category (Persist the change made in handleDragOver)
+            if (!isCategory(active.id) && isCategory(over.id)) {
+                fetch('/api/sites', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(sites)
+                }).catch(e => {
+                    showToast('移动保存失败', 'error');
+                    console.error(e);
+                });
             }
         }
     };
+
+    // ...
+
+
 
     const handleSyncBing = async () => {
         try {
@@ -192,6 +360,21 @@ export function SettingsPanel({
         // Filter Custom Fonts
         const customFonts = allFonts.filter((f: any) => f.isCustom);
 
+        // Fetch Todos and Countdowns
+        let todos = [];
+        let countdowns = [];
+        try {
+            const [todoRes, countdownRes] = await Promise.all([
+                fetch('/api/todos'),
+                fetch('/api/countdowns')
+            ]);
+            if (todoRes.ok) todos = await todoRes.json();
+            if (countdownRes.ok) countdowns = await countdownRes.json();
+        } catch (e) {
+            console.error('Failed to fetch widget data', e);
+            showToast('组件数据获取失败，将仅导出配置', 'error');
+        }
+
         const data = JSON.stringify({
             sites,
             categories,
@@ -200,7 +383,10 @@ export function SettingsPanel({
             config: appConfig,
             hiddenCategories, // Export hidden state
             theme: { isDarkMode }, // Export theme
-            customFonts // Export custom fonts
+            searchEngine, // [NEW] Export Search Engine
+            customFonts, // Export custom fonts
+            todos, // Export todos
+            countdowns // Export countdowns
         });
 
         const blob = new Blob([data], { type: 'application/json' });
@@ -777,6 +963,7 @@ export function SettingsPanel({
                                                                         bgScale: v
                                                                     })} />
                                                             </div>
+
                                                             <div className={`p-3 rounded-xl border transition-all hover:border-indigo-500/50 ${isDarkMode ? 'bg-white/5 border-white/5' : 'bg-slate-50 border-slate-100'}`}>
                                                                 <RangeControl label="遮罩浓度"
                                                                     value={layoutSettings.bgOpacity}
@@ -839,6 +1026,10 @@ export function SettingsPanel({
                                             <Switch id="show-widgets" checked={layoutSettings.showWidgets} onCheckedChange={(c) => setLayoutSettings({ ...layoutSettings, showWidgets: c })} />
                                         </div>
                                         <div className={`flex items-center justify-between p-3 rounded-xl border transition-all hover:border-indigo-500/50 ${isDarkMode ? 'bg-white/5 border-white/5' : 'bg-slate-50 border-slate-100'}`}>
+                                            <Label htmlFor="show-navbar" className="cursor-pointer font-medium">显示导航条</Label>
+                                            <Switch id="show-navbar" checked={layoutSettings.showNavBar ?? true} onCheckedChange={(c) => setLayoutSettings({ ...layoutSettings, showNavBar: c })} />
+                                        </div>
+                                        <div className={`flex items-center justify-between p-3 rounded-xl border transition-all hover:border-indigo-500/50 ${isDarkMode ? 'bg-white/5 border-white/5' : 'bg-slate-50 border-slate-100'}`}>
                                             <Label htmlFor="sticky-header" className="cursor-pointer font-medium">固定页首</Label>
                                             <Switch id="sticky-header" checked={layoutSettings.stickyHeader} onCheckedChange={(c) => setLayoutSettings({ ...layoutSettings, stickyHeader: c })} />
                                         </div>
@@ -846,19 +1037,54 @@ export function SettingsPanel({
                                             <Label htmlFor="sticky-footer" className="cursor-pointer font-medium">固定页尾</Label>
                                             <Switch id="sticky-footer" checked={layoutSettings.stickyFooter} onCheckedChange={(c) => setLayoutSettings({ ...layoutSettings, stickyFooter: c })} />
                                         </div>
-                                    </div>
 
+                                    </div>
                                 </div>
                                 <div className="space-y-4"><h4 className="text-base font-bold opacity-80">卡片样式</h4>
                                     <div className="grid grid-cols-2 gap-3">
                                         <div className={`p-3 rounded-xl border transition-all hover:border-indigo-500/50 ${isDarkMode ? 'bg-white/5 border-white/5' : 'bg-slate-50 border-slate-100'}`}>
-                                            <RangeControl label="卡片高度" value={layoutSettings.cardHeight} min={80} max={160}
+                                            <RangeControl label="卡片高度" value={layoutSettings.cardHeight} min={20} max={160}
                                                 onChange={(v: number) => setLayoutSettings({ ...layoutSettings, cardHeight: v })} unit="px" />
                                         </div>
                                         <div className={`p-3 rounded-xl border transition-all hover:border-indigo-500/50 ${isDarkMode ? 'bg-white/5 border-white/5' : 'bg-slate-50 border-slate-100'}`}>
-                                            <RangeControl label="每行数量" value={layoutSettings.gridCols} min={3} max={8}
-                                                onChange={(v: number) => setLayoutSettings({ ...layoutSettings, gridCols: v })} />
+                                            <RangeControl label="卡片圆角" value={layoutSettings.cardRadius ?? 16} min={0} max={32}
+                                                onChange={(v: number) => setLayoutSettings({ ...layoutSettings, cardRadius: v })} unit="px" />
                                         </div>
+
+                                        {/* Layout Mode Toggle */}
+                                        <div className={`p-3 rounded-xl border transition-all hover:border-indigo-500/50 ${isDarkMode ? 'bg-white/5 border-white/5' : 'bg-slate-50 border-slate-100'}`}>
+                                            <div className="flex items-center justify-between mb-2">
+                                                <Label className="cursor-pointer font-medium">布局模式</Label>
+                                                <div className={`flex items-center p-1 rounded-lg ${isDarkMode ? 'bg-black/20' : 'bg-slate-200'}`}>
+                                                    <button
+                                                        onClick={() => setLayoutSettings({ ...layoutSettings, gridMode: 'auto' })}
+                                                        className={`px-2 py-1 text-xs rounded-md transition-all ${(!layoutSettings.gridMode || layoutSettings.gridMode === 'auto') ? 'bg-white text-indigo-600 shadow-sm' : 'opacity-50'}`}
+                                                    >自动宽度</button>
+                                                    <button
+                                                        onClick={() => setLayoutSettings({ ...layoutSettings, gridMode: 'fixed' })}
+                                                        className={`px-2 py-1 text-xs rounded-md transition-all ${layoutSettings.gridMode === 'fixed' ? 'bg-white text-indigo-600 shadow-sm' : 'opacity-50'}`}
+                                                    >固定列数</button>
+                                                </div>
+                                            </div>
+                                            <p className="text-[10px] opacity-60">
+                                                {(!layoutSettings.gridMode || layoutSettings.gridMode === 'auto')
+                                                    ? '卡片保持设定宽度，自动计算每行数量'
+                                                    : '每行固定显示指定数量的卡片，宽度自适应'}
+                                            </p>
+                                        </div>
+
+                                        {/* Conditional Sliders based on Mode */}
+                                        {(!layoutSettings.gridMode || layoutSettings.gridMode === 'auto') ? (
+                                            <div className={`p-3 rounded-xl border transition-all hover:border-indigo-500/50 ${isDarkMode ? 'bg-white/5 border-white/5' : 'bg-slate-50 border-slate-100'}`}>
+                                                <RangeControl label="卡片宽度 (目标)" value={layoutSettings.cardWidth || 260} min={160} max={400}
+                                                    onChange={(v: number) => setLayoutSettings({ ...layoutSettings, cardWidth: v })} unit="px" />
+                                            </div>
+                                        ) : (
+                                            <div className={`p-3 rounded-xl border transition-all hover:border-indigo-500/50 ${isDarkMode ? 'bg-white/5 border-white/5' : 'bg-slate-50 border-slate-100'}`}>
+                                                <RangeControl label="每行数量" value={layoutSettings.gridCols} min={1} max={12}
+                                                    onChange={(v: number) => setLayoutSettings({ ...layoutSettings, gridCols: v })} />
+                                            </div>
+                                        )}
                                         <div className={`p-3 rounded-xl border transition-all hover:border-indigo-500/50 ${isDarkMode ? 'bg-white/5 border-white/5' : 'bg-slate-50 border-slate-100'}`}>
                                             <RangeControl label="网格间距" value={layoutSettings.gap} min={2} max={8}
                                                 onChange={(v: number) => setLayoutSettings({ ...layoutSettings, gap: v })} />
@@ -885,13 +1111,6 @@ export function SettingsPanel({
                                     <div className="space-y-4">
                                         <h4 className="text-base font-bold opacity-80 flex items-center gap-2"><Type
                                             size={16} /> 网站标识</h4>
-                                        <div className="space-y-1.5">
-                                            <Label>网页标题</Label>
-                                            <Input
-                                                value={appConfig.siteTitle}
-                                                onChange={e => setAppConfig({ ...appConfig, siteTitle: e.target.value })}
-                                            />
-                                        </div>
                                         <div className="space-y-4 animate-in fade-in">
                                             <div className="space-y-3">
                                                 <Label>Logo 图片</Label>
@@ -913,18 +1132,32 @@ export function SettingsPanel({
 
                                             <Separator />
 
-                                            <div className="grid grid-cols-2 gap-3">
-                                                <div className="space-y-1.5">
-                                                    <Label>Logo 主文字</Label>
-                                                    <Input
+                                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                                                <div className={`rounded-xl border transition-colors focus-within:ring-1 focus-within:ring-indigo-500/50 ${isDarkMode ? 'bg-white/5 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
+                                                    <label className={`block text-xs font-bold px-3 py-2 opacity-60 text-center border-b ${isDarkMode ? 'border-white/5' : 'border-slate-200'}`}>网页标题</label>
+                                                    <input
+                                                        type="text"
+                                                        className="w-full bg-transparent border-0 p-0 px-3 py-2 text-base focus:ring-0 outline-none placeholder:text-muted-foreground/30 text-center font-medium"
+                                                        value={appConfig.siteTitle}
+                                                        onChange={e => setAppConfig({ ...appConfig, siteTitle: e.target.value })}
+                                                        placeholder="未命名站点"
+                                                    />
+                                                </div>
+                                                <div className={`rounded-xl border transition-colors focus-within:ring-1 focus-within:ring-indigo-500/50 ${isDarkMode ? 'bg-white/5 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
+                                                    <label className={`block text-xs font-bold px-3 py-2 opacity-60 text-center border-b ${isDarkMode ? 'border-white/5' : 'border-slate-200'}`}>Logo 主文字</label>
+                                                    <input
+                                                        type="text"
+                                                        className="w-full bg-transparent border-0 p-0 px-3 py-2 text-base focus:ring-0 outline-none placeholder:text-muted-foreground/30 text-center font-medium"
                                                         value={appConfig.logoText}
                                                         onChange={e => setAppConfig({ ...appConfig, logoText: e.target.value })}
                                                         placeholder="例如：极光"
                                                     />
                                                 </div>
-                                                <div className="space-y-1.5">
-                                                    <Label>Logo 高亮文字</Label>
-                                                    <Input
+                                                <div className={`rounded-xl border transition-colors focus-within:ring-1 focus-within:ring-indigo-500/50 ${isDarkMode ? 'bg-white/5 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
+                                                    <label className={`block text-xs font-bold px-3 py-2 opacity-60 text-center border-b ${isDarkMode ? 'border-white/5' : 'border-slate-200'}`}>Logo 高亮文字</label>
+                                                    <input
+                                                        type="text"
+                                                        className="w-full bg-transparent border-0 p-0 px-3 py-2 text-base focus:ring-0 outline-none placeholder:text-muted-foreground/30 text-center font-medium"
                                                         value={appConfig.logoHighlight}
                                                         onChange={e => setAppConfig({ ...appConfig, logoHighlight: e.target.value })}
                                                         placeholder="例如：导航"
@@ -967,6 +1200,196 @@ export function SettingsPanel({
                                             </Button>
                                         </div>
 
+                                        {/* Social Icons Editor */}
+                                        <div className="space-y-3 mt-6 pt-6 border-t border-dashed border-slate-200 dark:border-white/10">
+                                            <Label className="flex items-center gap-2"><Share2 size={14} /> 社交图标</Label>
+
+                                            {/* Available Icons Grid */}
+                                            <div className={`p-3 rounded-xl border ${isDarkMode ? 'bg-white/5 border-white/5' : 'bg-slate-50 border-slate-100'}`}>
+                                                <p className="text-xs opacity-50 mb-2">点击添加图标：</p>
+                                                <div className="flex flex-wrap gap-2">
+                                                    {SOCIAL_ICONS.map((social) => {
+                                                        const Icon = social.icon;
+                                                        const isAdded = (appConfig.socialLinks || []).some((s: any) => s.icon === social.id);
+                                                        return (
+                                                            <button
+                                                                key={social.id}
+                                                                onClick={() => {
+                                                                    if (!isAdded) {
+                                                                        setAppConfig({
+                                                                            ...appConfig,
+                                                                            socialLinks: [...(appConfig.socialLinks || []), { icon: social.id, url: '' }]
+                                                                        });
+                                                                    }
+                                                                }}
+                                                                disabled={isAdded}
+                                                                title={social.name}
+                                                                className={`p-2 rounded-lg border transition-all ${isAdded ? 'opacity-30 cursor-not-allowed border-transparent' : 'hover:bg-indigo-500/10 hover:border-indigo-500/50 border-transparent cursor-pointer'}`}
+                                                            >
+                                                                <Icon size={18} />
+                                                            </button>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </div>
+
+                                            {/* Added Social Links */}
+                                            {(appConfig.socialLinks || []).length > 0 && (
+                                                <div className="space-y-2">
+                                                    {(appConfig.socialLinks || []).map((link: any, i: number) => {
+                                                        const socialDef = SOCIAL_ICONS.find(s => s.id === link.icon);
+                                                        const Icon = socialDef?.icon || Globe;
+                                                        return (
+                                                            <div key={i} className="flex gap-2 items-center animate-in fade-in slide-in-from-left-2" style={{ animationDelay: `${i * 50}ms` }}>
+                                                                <div className={`p-2 rounded-lg ${isDarkMode ? 'bg-white/10' : 'bg-slate-100'}`}>
+                                                                    <Icon size={16} />
+                                                                </div>
+                                                                <Input
+                                                                    className="flex-1"
+                                                                    value={link.url}
+                                                                    onChange={(e) => {
+                                                                        const newLinks = [...(appConfig.socialLinks || [])];
+                                                                        newLinks[i] = { ...newLinks[i], url: e.target.value };
+                                                                        setAppConfig({ ...appConfig, socialLinks: newLinks });
+                                                                    }}
+                                                                    placeholder={`${socialDef?.name || 'Link'} URL`}
+                                                                />
+                                                                <button
+                                                                    onClick={() => {
+                                                                        const newLinks = [...(appConfig.socialLinks || [])];
+                                                                        newLinks.splice(i, 1);
+                                                                        setAppConfig({ ...appConfig, socialLinks: newLinks });
+                                                                    }}
+                                                                    className="p-2.5 text-slate-400 hover:text-red-500 hover:bg-red-500/10 rounded-xl transition-colors"
+                                                                >
+                                                                    <Trash2 size={16} />
+                                                                </button>
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            )}
+
+                                        </div>
+                                    </div>
+
+                                    {/* Widget Config Section */}
+                                    <div className={`space-y-3 p-4 rounded-xl border transition-all ${isDarkMode ? 'bg-white/5 border-white/5' : 'bg-slate-50 border-slate-100'}`}>
+                                        <h4 className="text-base font-bold opacity-80 flex items-center gap-2">
+                                            <Globe size={16} className="text-indigo-500" />
+                                            组件设置
+                                        </h4>
+
+                                        {/* Pomodoro Duration */}
+                                        <div className="space-y-2">
+                                            <Label className="text-sm font-medium">番茄钟时长（分钟）</Label>
+                                            <div className="flex items-center gap-3">
+                                                <Input
+                                                    type="number"
+                                                    min={1}
+                                                    max={120}
+                                                    value={appConfig.widgetConfig?.pomodoroDuration || 25}
+                                                    onChange={(e) => setAppConfig({
+                                                        ...appConfig,
+                                                        widgetConfig: {
+                                                            ...appConfig.widgetConfig,
+                                                            pomodoroDuration: parseInt(e.target.value) || 25
+                                                        }
+                                                    })}
+                                                    className="w-24"
+                                                />
+                                                <span className="text-xs opacity-50">默认 25 分钟</span>
+                                            </div>
+                                        </div>
+
+                                        {/* World Clocks */}
+                                        <div className="space-y-2">
+                                            <div className="flex items-center justify-between">
+                                                <Label className="text-sm font-medium">世界时钟（最多6个）</Label>
+                                                <button
+                                                    onClick={() => {
+                                                        const clocks = appConfig.widgetConfig?.worldClocks || [];
+                                                        if (clocks.length < 6) {
+                                                            setAppConfig({
+                                                                ...appConfig,
+                                                                widgetConfig: {
+                                                                    ...appConfig.widgetConfig,
+                                                                    worldClocks: [...clocks, { name: '新城市', timezone: 'UTC' }]
+                                                                }
+                                                            });
+                                                        }
+                                                    }}
+                                                    disabled={(appConfig.widgetConfig?.worldClocks?.length || 0) >= 6}
+                                                    className="flex items-center gap-1 px-2 py-1 text-xs bg-indigo-500/10 text-indigo-500 rounded-lg hover:bg-indigo-500/20 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                                                >
+                                                    <Plus size={14} /> 添加
+                                                </button>
+                                            </div>
+                                            <div className="space-y-2">
+                                                {(appConfig.widgetConfig?.worldClocks || []).map((clock: { name: string; timezone: string }, i: number) => (
+                                                    <div key={i} className="flex items-center gap-2">
+                                                        <Input
+                                                            value={clock.name}
+                                                            onChange={(e) => {
+                                                                const clocks = [...(appConfig.widgetConfig?.worldClocks || [])];
+                                                                clocks[i] = { ...clocks[i], name: e.target.value };
+                                                                setAppConfig({
+                                                                    ...appConfig,
+                                                                    widgetConfig: { ...appConfig.widgetConfig, worldClocks: clocks }
+                                                                });
+                                                            }}
+                                                            placeholder="城市名"
+                                                            className="w-20"
+                                                        />
+                                                        <select
+                                                            value={clock.timezone}
+                                                            onChange={(e) => {
+                                                                const clocks = [...(appConfig.widgetConfig?.worldClocks || [])];
+                                                                clocks[i] = { ...clocks[i], timezone: e.target.value };
+                                                                setAppConfig({
+                                                                    ...appConfig,
+                                                                    widgetConfig: { ...appConfig.widgetConfig, worldClocks: clocks }
+                                                                });
+                                                            }}
+                                                            className={`flex-1 px-3 py-2 text-sm rounded-lg border transition-colors ${isDarkMode ? 'bg-slate-800 border-white/10' : 'bg-white border-slate-200'}`}
+                                                        >
+                                                            <option value="America/New_York">纽约 (UTC-5)</option>
+                                                            <option value="America/Los_Angeles">洛杉矶 (UTC-8)</option>
+                                                            <option value="America/Chicago">芝加哥 (UTC-6)</option>
+                                                            <option value="Europe/London">伦敦 (UTC+0)</option>
+                                                            <option value="Europe/Paris">巴黎 (UTC+1)</option>
+                                                            <option value="Europe/Berlin">柏林 (UTC+1)</option>
+                                                            <option value="Europe/Moscow">莫斯科 (UTC+3)</option>
+                                                            <option value="Asia/Tokyo">东京 (UTC+9)</option>
+                                                            <option value="Asia/Shanghai">上海 (UTC+8)</option>
+                                                            <option value="Asia/Hong_Kong">香港 (UTC+8)</option>
+                                                            <option value="Asia/Singapore">新加坡 (UTC+8)</option>
+                                                            <option value="Asia/Seoul">首尔 (UTC+9)</option>
+                                                            <option value="Asia/Dubai">迪拜 (UTC+4)</option>
+                                                            <option value="Australia/Sydney">悉尼 (UTC+11)</option>
+                                                            <option value="Pacific/Auckland">奥克兰 (UTC+13)</option>
+                                                            <option value="UTC">UTC</option>
+                                                        </select>
+                                                        <button
+                                                            onClick={() => {
+                                                                const clocks = [...(appConfig.widgetConfig?.worldClocks || [])];
+                                                                clocks.splice(i, 1);
+                                                                setAppConfig({
+                                                                    ...appConfig,
+                                                                    widgetConfig: { ...appConfig.widgetConfig, worldClocks: clocks }
+                                                                });
+                                                            }}
+                                                            className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-500/10 rounded-lg transition-colors"
+                                                        >
+                                                            <Trash2 size={14} />
+                                                        </button>
+                                                    </div>
+                                                ))}
+                                                {(appConfig.widgetConfig?.worldClocks?.length || 0) === 0 && (
+                                                    <p className="text-xs opacity-50 text-center py-2">暂无世界时钟，点击添加</p>
+                                                )}
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
                             )}
@@ -974,11 +1397,11 @@ export function SettingsPanel({
                                 <div className="space-y-4">
                                     <NewCategoryInput onAdd={handleAddCategory} isDarkMode={isDarkMode} />
                                     <div className="space-y-2">
-                                        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+                                        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragOver={handleDragOver} onDragEnd={handleDragEnd}>
                                             <SortableContext items={categories} strategy={verticalListSortingStrategy}>
                                                 {categories.map((cat: string, idx: number) => (
                                                     <SortableCategoryItem key={cat} id={cat}>
-                                                        <div className={`p-3 rounded-xl border transition-colors ${isDarkMode ? 'bg-white/5 border-white/5' : 'bg-slate-50 border-slate-100'}`}>
+                                                        <div className={`group p-3 rounded-xl border transition-colors ${isDarkMode ? 'bg-white/5 border-white/5' : 'bg-slate-50 border-slate-100'}`}>
                                                             <div className="flex items-center justify-between">
                                                                 <div className="flex items-center gap-3">
                                                                     <SortableDragHandle className="cursor-grab active:cursor-grabbing text-slate-400 hover:text-indigo-500">
@@ -988,25 +1411,56 @@ export function SettingsPanel({
                                                                         {expandedCategories.includes(cat) ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
                                                                     </button>
 
-                                                                    {/* Category Color Picker */}
-                                                                    <div className="relative group/color">
-                                                                        <div
-                                                                            className="w-6 h-6 rounded-full shadow-sm cursor-pointer ring-1 ring-black/5"
-                                                                            style={{ backgroundColor: categoryColors[cat] || '#6366F1' }}></div>
-                                                                        <input
-                                                                            type="color"
-                                                                            value={categoryColors[cat] || '#6366F1'}
-                                                                            onChange={(e) => setCategoryColors({
-                                                                                ...categoryColors,
-                                                                                [cat]: e.target.value
-                                                                            })}
-                                                                            className="absolute inset-0 opacity-0 cursor-pointer"
-                                                                        />
+                                                                    <div
+                                                                        className={`pl-2 pr-4 py-1.5 rounded-2xl text-sm font-bold tracking-wide backdrop-blur-xl border-0 ring-1 ring-white/20 flex items-center gap-3 transition-all select-none
+                                                                        ${isDarkMode ? 'bg-slate-900/40 text-slate-200' : 'bg-white/60 text-slate-700'}`}
+                                                                        style={{
+                                                                            boxShadow: `0 4px 16px -4px ${categoryColors[cat] || '#6366F1'}33, inset 0 0 0 1px ${isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.5)'}`
+                                                                        }}
+                                                                    >
+                                                                        <div className="relative w-4 h-4 rounded-full shadow-[0_0_8px_currentColor] animate-pulse shrink-0 cursor-pointer hover:scale-110 transition-transform"
+                                                                            style={{ backgroundColor: categoryColors[cat] || '#6366F1' }}>
+                                                                            <input
+                                                                                type="color"
+                                                                                value={categoryColors[cat] || '#6366F1'}
+                                                                                onChange={(e) => setCategoryColors({ ...categoryColors, [cat]: e.target.value })}
+                                                                                className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                                                                            />
+                                                                        </div>
+                                                                        {renamingCategory === cat ? (
+                                                                            <div className="flex items-center gap-1" onClick={e => e.stopPropagation()} onMouseDown={e => e.stopPropagation()}>
+                                                                                <Input
+                                                                                    value={renameValue}
+                                                                                    onChange={(e) => setRenameValue(e.target.value)}
+                                                                                    className="h-6 w-32 text-sm px-1 py-0 select-text bg-white dark:bg-slate-800"
+                                                                                    autoFocus
+                                                                                    onKeyDown={(e) => {
+                                                                                        if (e.key === 'Enter') handleRename();
+                                                                                        if (e.key === 'Escape') setRenamingCategory(null);
+                                                                                        e.stopPropagation();
+                                                                                    }}
+                                                                                />
+                                                                                <button onClick={handleRename} className="p-1 hover:text-green-500 rounded-full hover:bg-green-500/10 transition-colors"><Check size={14} /></button>
+                                                                                <button onClick={() => setRenamingCategory(null)} className="p-1 hover:text-red-500 rounded-full hover:bg-red-500/10 transition-colors"><X size={14} /></button>
+                                                                            </div>
+                                                                        ) : (
+                                                                            <>
+                                                                                <span
+                                                                                    className={`${hiddenCategories.includes(cat) ? 'opacity-50 line-through decoration-2' : ''} cursor-pointer hover:text-indigo-500 transition-colors`}
+                                                                                    onClick={() => { setRenamingCategory(cat); setRenameValue(cat); }}
+                                                                                    title="点击重命名"
+                                                                                >
+                                                                                    {cat}
+                                                                                </span>
+                                                                                <button onClick={() => { setRenamingCategory(cat); setRenameValue(cat); }} className="opacity-0 group-hover:opacity-100 transition-opacity p-1 text-slate-400 hover:text-indigo-500 rounded hover:bg-indigo-50 dark:hover:bg-white/10">
+                                                                                    <Edit3 size={12} />
+                                                                                </button>
+                                                                                <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-black/5 dark:bg-white/10 opacity-70">
+                                                                                    {sites.filter((s: any) => s.category === cat).length}
+                                                                                </span>
+                                                                            </>
+                                                                        )}
                                                                     </div>
-                                                                    <span
-                                                                        className={`text-sm ${hiddenCategories.includes(cat) ? 'opacity-50 line-through decoration-2' : 'font-medium'}`}>{cat}</span>
-                                                                    <span
-                                                                        className="text-xs px-2 py-0.5 rounded-md bg-indigo-500/10 text-indigo-500">{sites.filter((s: any) => s.category === cat).length}</span>
                                                                 </div>
                                                                 <div className="flex gap-1">
                                                                     <button onClick={() => toggleCategoryVisibility(cat)}
@@ -1021,40 +1475,36 @@ export function SettingsPanel({
                                                             {/* Expanded Site List */}
                                                             {expandedCategories.includes(cat) && (
                                                                 <div className="mt-3 pl-8 pr-2 animate-in slide-in-from-top-2 fade-in duration-200">
+                                                                    {/* Only render Root sites here. Nested handled by SortableSiteItem */}
                                                                     <SortableContext
-                                                                        items={sites.filter((s: any) => s.category === cat).map((s: any) => s.id)}
+                                                                        items={sites.filter((s: any) => s.category === cat && !s.parentId).map((s: any) => s.id)}
                                                                         strategy={verticalListSortingStrategy}
                                                                     >
                                                                         <div className="space-y-1">
-                                                                            {sites.filter((s: any) => s.category === cat).map((site: any) => (
+                                                                            {sites.filter((s: any) => s.category === cat && !s.parentId).map((site: any) => (
                                                                                 <SortableSiteItem
                                                                                     key={site.id}
                                                                                     site={site}
+                                                                                    sites={sites} /* PASS SITES HERE */
                                                                                     isDarkMode={isDarkMode}
                                                                                     onEdit={() => {
                                                                                         setEditingSite(site);
                                                                                         setIsModalOpen(true);
                                                                                     }}
-                                                                                    onDelete={() => {
-                                                                                        // We need a helper to confirm delete site. 
-                                                                                        // Currently handleDeleteCategory uses setConfirmingDeleteCategory used in page.tsx
-                                                                                        // SettingsPanel needs a callback for delete site?
-                                                                                        // Ah, SettingsPanel doesn't have onDeleteSite prop.
-                                                                                        // But wait, page.tsx handles confirmation modals.
-                                                                                        // SettingsPanel needs to be able to setConfirmingDeleteSite in page.tsx
-                                                                                        // I forgot to pass that prop!
-                                                                                        // Use a hack or add another prop.
-                                                                                        onDeleteSite(site);
+                                                                                    onDelete={(siteOrEvent: any) => {
+                                                                                        // If event or site is passed, handle correctly.
+                                                                                        // SortableSiteItem passes the site object itself in my new implementation.
+                                                                                        onDeleteSite(siteOrEvent);
                                                                                     }}
-                                                                                    onToggleHidden={() => {
-                                                                                        const updated = { ...site, isHidden: !site.isHidden };
-                                                                                        setSites(sites.map(s => s.id === site.id ? updated : s));
-                                                                                        // Sync will pick this up
+                                                                                    onToggleHidden={(s: any) => {
+                                                                                        const target = s.id ? s : site;
+                                                                                        const updated = { ...target, isHidden: !target.isHidden };
+                                                                                        setSites(sites.map(s => s.id === target.id ? updated : s));
                                                                                     }}
                                                                                 />
                                                                             ))}
-                                                                            {sites.filter((s: any) => s.category === cat).length === 0 && (
-                                                                                <div className="text-xs text-center py-2 opacity-50 border border-dashed rounded-lg">暂无站点</div>
+                                                                            {sites.filter((s: any) => s.category === cat && !s.parentId).length === 0 && (
+                                                                                <div className="text-xs text-center py-2 opacity-50 border border-dashed rounded-lg">暂无根站点</div>
                                                                             )}
                                                                         </div>
                                                                     </SortableContext>
@@ -1080,6 +1530,54 @@ export function SettingsPanel({
                                         </div>
                                         <Switch id="private-mode" checked={appConfig.privateMode || false} onCheckedChange={(c) => setAppConfig({ ...appConfig, privateMode: c })} />
                                     </div>
+
+                                    {/* Private Password Setting */}
+                                    {appConfig.privateMode && (
+                                        <div className={`p-4 rounded-xl border animate-in slide-in-from-top-2 ${isDarkMode ? 'bg-indigo-500/10 border-indigo-500/20' : 'bg-indigo-50 border-indigo-100'}`}>
+                                            <div className="space-y-3">
+                                                <div className="flex items-center gap-2">
+                                                    <Lock size={16} className="text-indigo-500" />
+                                                    <span className="text-sm font-bold text-indigo-500">访问密码</span>
+                                                </div>
+                                                <div className="flex gap-2">
+                                                    <Input
+                                                        type="password"
+                                                        placeholder="设置独立访问密码 (留空则使用管理员密码)"
+                                                        className="bg-white dark:bg-slate-900"
+                                                        onChange={(e) => {
+                                                            // Storing in a ref or local state would be better, but for simplicity:
+                                                            // We'll use a local state or just fire immediately on blur / button click.
+                                                            // Let's add a "Save" button for this specific field or use a local state.
+                                                            // Since SettingsPanel is large, let's use a local variable inside the component logic above, but here I am inside JSX.
+                                                            // I'll add a small inner form or just an input with a button.
+                                                        }}
+                                                        id="private-pwd-input"
+                                                    />
+                                                    <Button onClick={async () => {
+                                                        const input = document.getElementById('private-pwd-input') as HTMLInputElement;
+                                                        const val = input.value;
+                                                        try {
+                                                            showToast('正在更新密码...', 'loading');
+                                                            const res = await fetch('/api/auth/private/update', {
+                                                                method: 'PUT',
+                                                                headers: { 'Content-Type': 'application/json' },
+                                                                body: JSON.stringify({ password: val })
+                                                            });
+                                                            if (res.ok) {
+                                                                showToast('访问密码已更新', 'success');
+                                                                input.value = '';
+                                                            } else {
+                                                                showToast('更新失败', 'error');
+                                                            }
+                                                        } catch (e) { showToast('请求出错', 'error'); }
+                                                    }}>更新</Button>
+                                                </div>
+                                                <p className="text-[10px] opacity-60">
+                                                    注意：设置为空将清除独立密码，恢复使用管理员密码验证。
+                                                </p>
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
 
                                 <Separator className={isDarkMode ? 'bg-white/10' : 'bg-slate-200'} />
