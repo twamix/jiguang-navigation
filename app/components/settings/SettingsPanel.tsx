@@ -37,6 +37,7 @@ import { Separator } from "@/components/ui/separator";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 
 import { FONTS, FRESH_BACKGROUND_COLORS, SOCIAL_ICONS } from '@/lib/constants';
+import { getRandomColor } from '@/lib/utils';
 import { RangeControl } from '@/app/components/ui/RangeControl';
 import { NewCategoryInput } from '@/app/components/settings/NewCategoryInput';
 import { BackgroundPositionPreview } from '@/app/components/settings/BackgroundPositionPreview';
@@ -47,6 +48,7 @@ import { AnimationControl } from '@/app/components/settings/AnimationControl';
 import { useFonts } from '@/app/hooks/useFonts';
 import { FontPickerModal } from '@/app/components/modals/FontPickerModal';
 import { ConfirmationModal } from '@/app/components/modals/ConfirmationModal';
+import { SyncProgressModal } from '@/app/components/modals/SyncProgressModal';
 
 interface SettingsPanelProps {
     isDarkMode: boolean;
@@ -69,7 +71,7 @@ interface SettingsPanelProps {
     handleImportData: (data: any) => void;
     appConfig: any;
     setAppConfig: (config: any) => void;
-    showToast: (message: string, type?: 'success' | 'error' | 'loading' | 'info') => void;
+    showToast: (message: string, type?: 'success' | 'error' | 'info' | 'loading', duration?: number) => void;
     isWallpaperManagerOpen: boolean;
     setIsWallpaperManagerOpen: (isOpen: boolean) => void;
     setBingWallpaper: (quality: string) => void;
@@ -123,9 +125,137 @@ export function SettingsPanel({
     const { allFonts, removeFont } = useFonts();
     const [isFontPickerOpen, setIsFontPickerOpen] = useState(false);
     const [fontToDelete, setFontToDelete] = useState<any>(null);
+    const [isResetFontsModalOpen, setIsResetFontsModalOpen] = useState(false);
 
     const [renamingCategory, setRenamingCategory] = useState<string | null>(null);
     const [renameValue, setRenameValue] = useState('');
+
+    // --- Sync Progress Logic ---
+    const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
+    const [syncStats, setSyncStats] = useState<{
+        progress: number;
+        total: number;
+        processed: number;
+        skipped: number;
+        success: number;
+        failed: number;
+        status: 'idle' | 'analyzing' | 'syncing' | 'finished';
+    }>({
+        progress: 0,
+        total: 0,
+        processed: 0,
+        skipped: 0,
+        success: 0,
+        failed: 0,
+        status: 'idle'
+    });
+
+    // 1. Open Modal and Calculate "To Sync"
+    const openSyncModal = async () => {
+        // Filter sites with valid URLs
+        const validSites = sites.filter((s: any) => s.url && (s.url.startsWith('http://') || s.url.startsWith('https://')));
+
+        if (validSites.length === 0) {
+            showToast('没有需要同步的站点 (请检查站点 URL)', 'info');
+            return;
+        }
+
+        setIsSyncModalOpen(true);
+        setSyncStats({
+            progress: 0,
+            total: validSites.length,
+            processed: 0,
+            skipped: 0,
+            success: 0,
+            failed: 0,
+            status: 'analyzing'
+        });
+
+        // Call API to analyze
+        try {
+            const validIds = validSites.map((s: any) => s.id);
+            const res = await fetch('/api/admin/cache-icons', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ siteIds: validIds, analyze: true })
+            });
+
+            if (res.ok) {
+                const data = await res.json();
+                setSyncStats(prev => ({
+                    ...prev,
+                    skipped: data.skipped,
+                    total: data.total,
+                    status: 'idle'
+                }));
+            } else {
+                showToast('分析失败，请稍后重试', 'error');
+                setSyncStats(prev => ({ ...prev, status: 'idle' }));
+            }
+        } catch (e) {
+            showToast('无法连接到服务器', 'error');
+            setSyncStats(prev => ({ ...prev, status: 'idle' }));
+        }
+    };
+
+    // 2. Execute Sync Logic
+    const executeSync = async () => {
+        const validSites = sites.filter((s: any) => s.url && (s.url.startsWith('http://') || s.url.startsWith('https://')));
+
+        setSyncStats(prev => ({ ...prev, status: 'syncing' }));
+
+        const BATCH_SIZE = 5;
+        let successCount = 0;
+        let failCount = 0;
+        // Keep the pre-calculated skipped count as base? No, the API will return accurate skipped counts.
+        // Actually, we should reset skipped to 0 and let the API authoritative answer come in?
+        // Or cumulatively add?
+        // Let's reset to 0 to be safe and accurate from trusted source (API).
+        let skippedCount = 0;
+        let processedCount = 0;
+
+        try {
+            for (let i = 0; i < validSites.length; i += BATCH_SIZE) {
+                // Check if modal still open/user didn't cancel? 
+                // Currently we don't have a "stop" mechanism easily, but let's assume it runs to completion.
+
+                const batch = validSites.slice(i, i + BATCH_SIZE);
+                const batchIds = batch.map((s: any) => s.id);
+
+                const res = await fetch('/api/admin/cache-icons', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ siteIds: batchIds })
+                });
+
+                if (res.ok) {
+                    const data = await res.json();
+                    successCount += data.successCount || 0;
+                    failCount += data.failCount || 0;
+                    skippedCount += data.skippedCount || 0;
+                } else {
+                    failCount += batch.length;
+                }
+
+                processedCount += batch.length;
+                const progress = Math.min(Math.round((processedCount / validSites.length) * 100), 100);
+
+                setSyncStats(prev => ({
+                    ...prev,
+                    progress,
+                    processed: processedCount,
+                    // skipped: skippedCount, // Keep analyzed skipped count stable
+                    success: successCount,
+                    failed: failCount
+                }));
+            }
+            setSyncStats(prev => ({ ...prev, status: 'finished', progress: 100 }));
+        } catch (e) {
+            showToast('同步过程中断', 'error');
+            setIsSyncModalOpen(false); // Close on critical error? Or show error state?
+        }
+    };
+
 
     const handleRename = async () => {
         if (!renamingCategory || !renameValue.trim() || renamingCategory === renameValue.trim()) {
@@ -337,7 +467,7 @@ export function SettingsPanel({
     };
 
     const handleExport = async () => {
-        let exportLayout = { ...layoutSettings };
+        const exportLayout = { ...layoutSettings };
 
         // Serialize Custom Wallpaper if exists
         if (layoutSettings.bgType === 'custom' && layoutSettings.bgColor && layoutSettings.bgColor.startsWith('/')) {
@@ -449,14 +579,14 @@ export function SettingsPanel({
                 style={{ backdropFilter: `blur(${layoutSettings.dialogBlur ?? 12}px)` }}
                 onClick={onClose}>
                 <div onClick={e => e.stopPropagation()}
-                    className={`w-full max-w-4xl rounded-3xl shadow-2xl backdrop-blur-2xl border flex overflow-hidden h-[650px] max-h-[90vh] animate-in zoom-in-95 slide-in-from-bottom-4 duration-300 ${isDarkMode ? 'bg-slate-900/95 border-white/10' : 'bg-white/95 border-slate-200/60'}`}>
+                    className={`w-full max-w-4xl rounded-2xl md:rounded-3xl shadow-2xl backdrop-blur-2xl border flex flex-col md:flex-row overflow-hidden h-[90vh] md:h-[650px] max-h-[95vh] md:max-h-[90vh] animate-in zoom-in-95 slide-in-from-bottom-4 duration-300 ${isDarkMode ? 'bg-slate-900/95 border-white/10' : 'bg-white/95 border-slate-200/60'}`}>
 
                     {/* Enhanced Sidebar */}
                     <div
-                        className={`w-64 flex-shrink-0 border-r p-5 flex flex-col gap-1.5 ${isDarkMode ? 'border-white/5 bg-gradient-to-b from-slate-800/50 to-slate-900/50' : 'border-slate-100 bg-gradient-to-b from-slate-50 to-white'}`}>
+                        className={`w-full md:w-64 flex-shrink-0 border-b md:border-b-0 md:border-r p-2 md:p-5 flex flex-row md:flex-col gap-1 md:gap-1.5 overflow-x-auto md:overflow-x-visible custom-scrollbar ${isDarkMode ? 'border-white/5 bg-gradient-to-b from-slate-800/50 to-slate-900/50' : 'border-slate-100 bg-gradient-to-b from-slate-50 to-white'}`}>
 
-                        {/* Header with gradient icon */}
-                        <div className="flex items-center gap-3 mb-5 px-2">
+                        {/* Header with gradient icon - 移动端隐藏 */}
+                        <div className="hidden md:flex items-center gap-3 mb-5 px-2">
                             <div className="p-2 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 text-white shadow-lg shadow-indigo-500/25">
                                 <Settings size={18} />
                             </div>
@@ -466,13 +596,13 @@ export function SettingsPanel({
                             </div>
                         </div>
 
-                        {/* Navigation Tabs */}
-                        <div className="space-y-1">
+                        {/* Navigation Tabs - 移动端水平滚动 */}
+                        <div className="flex flex-row md:flex-col md:space-y-1 gap-1 md:gap-0">
                             {tabs.map(t => (
                                 <Tooltip key={t.id}>
                                     <TooltipTrigger asChild>
                                         <button onClick={() => setActiveTab(t.id)}
-                                            className={`w-full text-left px-4 py-2.5 rounded-xl text-sm font-medium flex items-center gap-3 transition-all duration-200 group
+                                            className={`shrink-0 md:w-full text-left px-2 md:px-4 py-2 md:py-2.5 rounded-lg md:rounded-xl text-sm font-medium flex items-center gap-1.5 md:gap-3 transition-all duration-200 group
                         ${activeTab === t.id
                                                     ? (isDarkMode
                                                         ? 'bg-gradient-to-r from-indigo-500/20 to-purple-500/10 text-indigo-400 shadow-sm border border-indigo-500/20'
@@ -481,15 +611,15 @@ export function SettingsPanel({
                                                         ? 'text-slate-400 hover:bg-white/5 hover:text-slate-200'
                                                         : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900')
                                                 }`}>
-                                            <div className={`p-1.5 rounded-lg transition-all duration-200
+                                            <div className={`p-1 md:p-1.5 rounded-lg transition-all duration-200
                         ${activeTab === t.id
                                                     ? 'bg-indigo-500/20 text-indigo-500'
                                                     : 'bg-transparent group-hover:bg-slate-100 dark:group-hover:bg-white/10'}`}>
                                                 <t.icon size={16} />
                                             </div>
-                                            {t.label}
+                                            <span className="hidden md:inline">{t.label}</span>
                                             {activeTab === t.id && (
-                                                <div className="ml-auto w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse" />
+                                                <div className="hidden md:block ml-auto w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse" />
                                             )}
                                         </button>
                                     </TooltipTrigger>
@@ -500,22 +630,22 @@ export function SettingsPanel({
                             ))}
                         </div>
 
-                        <div className="flex-1" />
+                        <div className="hidden md:block flex-1" />
 
-                        {/* Close Button */}
-                        <Separator className="my-2 opacity-50" />
+                        {/* Close Button - 移动端仅图标 */}
+                        <Separator className="hidden md:block my-2 opacity-50" />
                         <button onClick={onClose}
-                            className={`w-full text-left px-4 py-2.5 rounded-xl text-sm font-medium flex items-center gap-3 transition-all duration-200 hover:scale-[0.98] active:scale-95 ${isDarkMode ? 'text-slate-400 hover:bg-red-500/10 hover:text-red-400' : 'text-slate-500 hover:bg-red-50 hover:text-red-500'}`}>
-                            <div className="p-1.5 rounded-lg">
+                            className={`shrink-0 md:w-full text-left px-2 md:px-4 py-2 md:py-2.5 rounded-lg md:rounded-xl text-sm font-medium flex items-center gap-1.5 md:gap-3 transition-all duration-200 hover:scale-[0.98] active:scale-95 ${isDarkMode ? 'text-slate-400 hover:bg-red-500/10 hover:text-red-400' : 'text-slate-500 hover:bg-red-50 hover:text-red-500'}`}>
+                            <div className="p-1 md:p-1.5 rounded-lg">
                                 <X size={16} />
                             </div>
-                            关闭面板
+                            <span className="hidden md:inline">关闭面板</span>
                         </button>
                     </div>
 
-                    {/* Content Area with ScrollArea */}
-                    <ScrollArea className="flex-1">
-                        <div className="p-6">
+                    {/* Content Area with ScrollArea - 确保移动端可滚动 */}
+                    <ScrollArea className="flex-1 h-full">
+                        <div className="p-4 md:p-6 pb-20 md:pb-8">
 
                             {/* 外观 Tab */}
                             {activeTab === 'appearance' && (<div className="space-y-5">
@@ -568,9 +698,20 @@ export function SettingsPanel({
 
                                 {/* Typography Customization Section */}
                                 <div className="mt-6 pt-6 border-t border-indigo-500/10 dark:border-white/5">
-                                    <div className="flex items-center gap-2 mb-4">
-                                        <Type size={16} className="text-indigo-500" />
-                                        <span className="text-sm font-bold text-indigo-500">卡片文字样式</span>
+                                    <div className="flex items-center justify-between mb-4">
+                                        <div className="flex items-center gap-2">
+                                            <Type size={16} className="text-indigo-500" />
+                                            <span className="text-sm font-bold text-indigo-500">卡片文字样式</span>
+                                        </div>
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            className="h-7 text-xs gap-1.5"
+                                            onClick={() => setIsResetFontsModalOpen(true)}
+                                        >
+                                            <RefreshCw size={12} />
+                                            一键恢复
+                                        </Button>
                                     </div>
 
                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
@@ -586,7 +727,6 @@ export function SettingsPanel({
                                                         setLayoutSettings({ ...layoutSettings, globalTitleFont: e.target.value });
                                                     }}
                                                 >
-                                                    <option value="system">系统默认</option>
                                                     {allFonts.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
                                                 </select>
                                                 <div className="flex items-center gap-2">
@@ -638,7 +778,6 @@ export function SettingsPanel({
                                                     value={layoutSettings.globalDescFont ?? 'system'}
                                                     onChange={(e) => setLayoutSettings({ ...layoutSettings, globalDescFont: e.target.value })}
                                                 >
-                                                    <option value="system">系统默认</option>
                                                     {allFonts.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
                                                 </select>
                                                 <div className="flex items-center gap-2">
@@ -1390,12 +1529,93 @@ export function SettingsPanel({
                                                 )}
                                             </div>
                                         </div>
+
+                                        {/* Widget Custom Colors */}
+                                        <div className="pt-4 mt-4 border-t border-dashed border-slate-200 dark:border-white/10 space-y-3">
+                                            <h5 className="text-sm font-bold opacity-80 flex items-center gap-2">
+                                                <Palette size={14} className="text-indigo-500" />
+                                                组件自定义颜色
+                                            </h5>
+                                            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                                {[
+                                                    { id: 'time', label: '时间组件' },
+                                                    { id: 'weather', label: '天气组件' },
+                                                    { id: 'tools', label: '工具组件' }
+                                                ].map(widget => (
+                                                    <div key={widget.id} className="space-y-1.5">
+                                                        <Label className="text-xs opacity-70">{widget.label}</Label>
+                                                        <div className="flex items-center gap-2 px-3 py-2 rounded-lg border w-full text-sm bg-white dark:bg-black/20 border-slate-200 dark:border-white/10">
+                                                            <div className="relative w-5 h-5 rounded-full shadow-sm shrink-0 border border-black/10 overflow-hidden"
+                                                                style={{
+                                                                    backgroundColor: appConfig.widgetConfig?.customColors?.[widget.id] || 'transparent',
+                                                                    backgroundImage: !appConfig.widgetConfig?.customColors?.[widget.id] ? 'linear-gradient(45deg, #ddd 25%, transparent 25%, transparent 75%, #ddd 75%, #ddd), linear-gradient(45deg, #ddd 25%, transparent 25%, transparent 75%, #ddd 75%, #ddd)' : 'none',
+                                                                    backgroundSize: '8px 8px', backgroundPosition: '0 0, 4px 4px'
+                                                                }}
+                                                            >
+                                                                <input
+                                                                    type="color"
+                                                                    className="absolute inset-0 opacity-0 cursor-pointer w-full h-full scale-150"
+                                                                    value={appConfig.widgetConfig?.customColors?.[widget.id] || '#ffffff'}
+                                                                    onChange={(e) => setAppConfig({
+                                                                        ...appConfig,
+                                                                        widgetConfig: {
+                                                                            ...appConfig.widgetConfig,
+                                                                            customColors: {
+                                                                                ...appConfig.widgetConfig?.customColors,
+                                                                                [widget.id]: e.target.value
+                                                                            }
+                                                                        }
+                                                                    })}
+                                                                />
+                                                            </div>
+                                                            <span className="opacity-70 truncate text-xs flex-1 font-mono">
+                                                                {appConfig.widgetConfig?.customColors?.[widget.id] || '默认'}
+                                                            </span>
+                                                            {appConfig.widgetConfig?.customColors?.[widget.id] && (
+                                                                <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0 hover:bg-red-500/10 hover:text-red-500"
+                                                                    onClick={() => {
+                                                                        const newColors = { ...appConfig.widgetConfig?.customColors };
+                                                                        delete newColors[widget.id];
+                                                                        setAppConfig({
+                                                                            ...appConfig,
+                                                                            widgetConfig: { ...appConfig.widgetConfig, customColors: newColors }
+                                                                        });
+                                                                    }}>
+                                                                    <X size={12} />
+                                                                </Button>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
                             )}
                             {activeTab === 'categories' && (
                                 <div className="space-y-4">
                                     <NewCategoryInput onAdd={handleAddCategory} isDarkMode={isDarkMode} />
+
+                                    {/* Site Statistics */}
+                                    <div className={`flex items-center justify-between px-4 py-3 rounded-xl border text-sm ${isDarkMode ? 'bg-white/5 border-white/5' : 'bg-slate-50 border-slate-100'}`}>
+                                        <div className="flex items-center gap-4">
+                                            <div className="flex items-center gap-1.5">
+                                                <span className="opacity-60">站点总数:</span>
+                                                <span className="font-bold text-indigo-500">{sites.filter((s: any) => s.type !== 'folder').length}</span>
+                                            </div>
+                                            <div className={`w-px h-4 ${isDarkMode ? 'bg-white/10' : 'bg-slate-200'}`} />
+                                            <div className="flex items-center gap-1.5">
+                                                <span className="opacity-60">文件夹:</span>
+                                                <span className="font-bold text-amber-500">{sites.filter((s: any) => s.type === 'folder').length}</span>
+                                            </div>
+                                            <div className={`w-px h-4 ${isDarkMode ? 'bg-white/10' : 'bg-slate-200'}`} />
+                                            <div className="flex items-center gap-1.5">
+                                                <span className="opacity-60">总计:</span>
+                                                <span className="font-bold">{sites.length}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+
                                     <div className="space-y-2">
                                         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragOver={handleDragOver} onDragEnd={handleDragEnd}>
                                             <SortableContext items={categories} strategy={verticalListSortingStrategy}>
@@ -1463,6 +1683,35 @@ export function SettingsPanel({
                                                                     </div>
                                                                 </div>
                                                                 <div className="flex gap-1">
+                                                                    <button
+                                                                        onClick={() => {
+                                                                            setEditingSite({
+                                                                                id: null,
+                                                                                name: '',
+                                                                                url: '',
+                                                                                desc: '',
+                                                                                category: cat,
+                                                                                color: getRandomColor(),
+                                                                                icon: 'Globe',
+                                                                                iconType: 'auto',
+                                                                                customIconUrl: '',
+                                                                                titleColor: '',
+                                                                                descColor: '',
+                                                                                titleFont: '',
+                                                                                descFont: '',
+                                                                                titleSize: '',
+                                                                                descSize: '',
+                                                                                isHidden: false,
+                                                                                type: 'site',
+                                                                                parentId: ''
+                                                                            });
+                                                                            setIsModalOpen(true);
+                                                                        }}
+                                                                        className="p-2 rounded hover:bg-indigo-500/10 text-slate-400 hover:text-indigo-500 active:scale-90"
+                                                                        title="添加站点到此分类"
+                                                                    >
+                                                                        <Plus size={16} />
+                                                                    </button>
                                                                     <button onClick={() => toggleCategoryVisibility(cat)}
                                                                         className="p-2 rounded hover:bg-black/5 dark:hover:bg-white/10 text-slate-400 active:scale-90">{hiddenCategories.includes(cat) ?
                                                                             <EyeOff size={16} /> : <Eye size={16} />}</button>
@@ -1500,6 +1749,29 @@ export function SettingsPanel({
                                                                                         const target = s.id ? s : site;
                                                                                         const updated = { ...target, isHidden: !target.isHidden };
                                                                                         setSites(sites.map(s => s.id === target.id ? updated : s));
+                                                                                    }}
+                                                                                    onAddToFolder={(parentId: string, category: string) => {
+                                                                                        setEditingSite({
+                                                                                            id: null,
+                                                                                            name: '',
+                                                                                            url: '',
+                                                                                            desc: '',
+                                                                                            category: category,
+                                                                                            color: getRandomColor(),
+                                                                                            icon: 'Globe',
+                                                                                            iconType: 'auto',
+                                                                                            customIconUrl: '',
+                                                                                            titleColor: '',
+                                                                                            descColor: '',
+                                                                                            titleFont: '',
+                                                                                            descFont: '',
+                                                                                            titleSize: '',
+                                                                                            descSize: '',
+                                                                                            isHidden: false,
+                                                                                            type: 'site',
+                                                                                            parentId: parentId
+                                                                                        });
+                                                                                        setIsModalOpen(true);
                                                                                     }}
                                                                                 />
                                                                             ))}
@@ -1540,18 +1812,22 @@ export function SettingsPanel({
                                                     <span className="text-sm font-bold text-indigo-500">访问密码</span>
                                                 </div>
                                                 <div className="flex gap-2">
-                                                    <Input
+                                                    <input
                                                         type="password"
                                                         placeholder="设置独立访问密码 (留空则使用管理员密码)"
-                                                        className="bg-white dark:bg-slate-900"
-                                                        onChange={(e) => {
-                                                            // Storing in a ref or local state would be better, but for simplicity:
-                                                            // We'll use a local state or just fire immediately on blur / button click.
-                                                            // Let's add a "Save" button for this specific field or use a local state.
-                                                            // Since SettingsPanel is large, let's use a local variable inside the component logic above, but here I am inside JSX.
-                                                            // I'll add a small inner form or just an input with a button.
-                                                        }}
+                                                        className={`flex-1 h-10 w-full rounded-md border px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${isDarkMode ? 'bg-slate-900 border-white/10' : 'bg-white border-slate-200'}`}
                                                         id="private-pwd-input"
+                                                        autoComplete="new-password"
+                                                        data-lpignore="true"
+                                                        name={`pwd_${Math.floor(Math.random() * 10000)}`}
+                                                        readOnly
+                                                        onFocus={(e) => {
+                                                            e.target.readOnly = false;
+                                                            // Optional: clear placeholder or visual cue
+                                                        }}
+                                                        onBlur={(e) => {
+                                                            e.target.readOnly = true;
+                                                        }}
                                                     />
                                                     <Button onClick={async () => {
                                                         const input = document.getElementById('private-pwd-input') as HTMLInputElement;
@@ -1683,20 +1959,7 @@ export function SettingsPanel({
                                                         onChange={handleFileSelect} /></div>
 
                                         {/* Sync Icons Button */}
-                                        <div onClick={async () => {
-                                            try {
-                                                showToast('正在后台同步图标...', 'success');
-                                                const res = await fetch('/api/admin/cache-icons', { method: 'POST' });
-                                                if (res.ok) {
-                                                    const data = await res.json();
-                                                    showToast(`同步完成，处理了 ${data.processed} 个站点`, 'success');
-                                                } else {
-                                                    showToast('同步失败', 'error');
-                                                }
-                                            } catch (e) {
-                                                showToast('请求失败', 'error');
-                                            }
-                                        }}
+                                        <div onClick={openSyncModal}
                                             className={`p-5 rounded-2xl border cursor-pointer text-center transition-all hover:scale-105 active:scale-95 ${isDarkMode ? 'bg-white/5 border-white/10 hover:bg-blue-500/20' : 'bg-slate-50 border-slate-200 hover:bg-blue-50'}`}>
                                             <RefreshCw size={32} className="mx-auto mb-3 text-blue-500" /><h4
                                                 className="font-bold mb-1">同步图标缓存</h4><p className="text-xs opacity-60">下载未缓存的
@@ -1729,6 +1992,45 @@ export function SettingsPanel({
                             }}
                         />
                     )}
+
+                    {isResetFontsModalOpen && (
+                        <ConfirmationModal
+                            isOpen={true}
+                            title="重置所有字体设置"
+                            message="确定要将所有站点的自定义字体设置重置为全局默认吗？这将清除所有站点的个性化字体、颜色和大小设置。"
+                            confirmText="确认重置"
+                            cancelText="取消"
+                            isDarkMode={isDarkMode}
+                            onCancel={() => setIsResetFontsModalOpen(false)}
+                            onConfirm={async () => {
+                                setIsResetFontsModalOpen(false);
+                                try {
+                                    showToast('正在重置...', 'loading');
+                                    const res = await fetch('/api/admin/reset-fonts', { method: 'POST' });
+                                    if (res.ok) {
+                                        const data = await res.json();
+                                        const sitesRes = await fetch('/api/init');
+                                        if (sitesRes.ok) {
+                                            const initData = await sitesRes.json();
+                                            setSites(initData.sites);
+                                        }
+                                        showToast(data.message || '重置成功', 'success');
+                                    } else {
+                                        showToast('重置失败', 'error');
+                                    }
+                                } catch (e) {
+                                    showToast('操作失败', 'error');
+                                }
+                            }}
+                        />
+                    )}
+
+                    <SyncProgressModal
+                        isOpen={isSyncModalOpen}
+                        onClose={() => setIsSyncModalOpen(false)}
+                        onStart={executeSync}
+                        {...syncStats}
+                    />
                 </div>
             </div >
         </TooltipProvider >

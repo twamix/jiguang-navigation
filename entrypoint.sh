@@ -7,8 +7,9 @@ if [ ! -f /app/data/dev.db ]; then
   echo "数据库初始化完成"
 fi
 
-# 确保 uploads 目录存在 (使用 data 卷进行统一存储)
-mkdir -p /app/data/uploads
+# 确保 uploads 目录及其子目录存在 (使用 data 卷进行统一存储)
+mkdir -p /app/data/uploads/wallpapers/bing
+mkdir -p /app/data/uploads/wallpapers/custom
 
 # 将 public/uploads 链接到 data/uploads
 if [ ! -L /app/public/uploads ]; then
@@ -21,9 +22,8 @@ if [ ! -L /app/public/uploads ]; then
 fi
 
 # 确保数据目录和上传目录有写入权限
-chmod -R 777 /app/data
-chmod -R 777 /app/public/uploads
-chmod 666 /app/data/dev.db 2>/dev/null || true
+chmod -R 777 /app/data 2>/dev/null || true
+chmod -R 777 /app/public/uploads 2>/dev/null || true
 
 # 启动应用
 exec node server.js

@@ -31,8 +31,11 @@ const LottieWeatherIcon = ({ code, size = 48 }: { code: number; size?: number })
 
         // Fetch animation data
         fetch(url)
-            .then(res => res.json())
-            .then(data => setAnimationData(data))
+            .then(res => {
+                if (!res.ok) return null;
+                return res.json();
+            })
+            .then(data => { if (data) setAnimationData(data); })
             .catch(() => setAnimationData(null));
     }, [code]);
 
@@ -64,11 +67,13 @@ const TiltCard = ({ children, className = '' }: { children: React.ReactNode; cla
 );
 
 // Gradient Border Component
-const GradientBorder = ({ isDarkMode }: { isDarkMode: boolean }) => (
+const GradientBorder = ({ isDarkMode, customColor }: { isDarkMode: boolean; customColor?: string }) => (
     <>
         {/* Animated gradient border */}
         <div className="absolute -inset-[1px] rounded-3xl bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 opacity-0 group-hover:opacity-50 transition-opacity duration-500 blur-sm animate-gradient-x" />
-        <div className={`absolute inset-0 rounded-3xl ${isDarkMode ? 'bg-slate-900/90' : 'bg-white/90'}`} />
+        <div className={`absolute inset-0 rounded-3xl ${isDarkMode ? 'bg-slate-900/90' : 'bg-gradient-to-br from-slate-100/90 to-slate-200/90'}`}
+            style={customColor ? { background: customColor } : {}}
+        />
     </>
 );
 
@@ -79,6 +84,11 @@ interface WidgetDashboardProps {
     widgetConfig?: {
         worldClocks?: { name: string; timezone: string }[];
         pomodoroDuration?: number;
+        customColors?: {
+            time?: string;
+            weather?: string;
+            tools?: string;
+        };
     };
 }
 
@@ -176,14 +186,20 @@ export const WidgetDashboard = React.memo(function WidgetDashboard({ isDarkMode,
     // Fetch Todos and Countdowns on mount
     useEffect(() => {
         fetch('/api/todos')
-            .then(res => res.json())
+            .then(res => {
+                if (!res.ok) return [];
+                return res.json();
+            })
             .then(data => { if (Array.isArray(data)) setTodos(data); })
-            .catch(err => console.error('Failed to load todos', err));
+            .catch(err => console.warn('Silently failed to load todos', err));
 
         fetch('/api/countdowns')
-            .then(res => res.json())
+            .then(res => {
+                if (!res.ok) return [];
+                return res.json();
+            })
             .then(data => { if (Array.isArray(data)) setCountdowns(data); })
-            .catch(err => console.error('Failed to load countdowns', err));
+            .catch(err => console.warn('Silently failed to load countdowns', err));
     }, []);
 
     // Animation counter for stats
@@ -234,6 +250,7 @@ export const WidgetDashboard = React.memo(function WidgetDashboard({ isDarkMode,
         const fetchMarketData = async () => {
             try {
                 const res = await fetch('/api/market');
+                if (!res.ok) return; // Silent fail
                 const data = await res.json();
                 if (Array.isArray(data)) {
                     setMarketData(data);
@@ -251,32 +268,43 @@ export const WidgetDashboard = React.memo(function WidgetDashboard({ isDarkMode,
     useEffect(() => {
         const fetchWeatherData = async (latitude: number, longitude: number) => {
             try {
-                // Fetch current + daily forecast (6 days)
-                const res = await fetch(
-                    `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current=temperature_2m,apparent_temperature,weather_code,wind_speed_10m&daily=weathercode,temperature_2m_max,temperature_2m_min,uv_index_max&timezone=auto`
-                );
-                const data = await res.json();
+                // Faraday: Fetch Weather (Forest & Daily) + Air Quality (AQI) in parallel
+                // Open-Meteo Weather API
+                const weatherPromise = fetch(
+                    `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current=temperature_2m,apparent_temperature,weather_code,wind_speed_10m,relative_humidity_2m&daily=weathercode,temperature_2m_max,temperature_2m_min,uv_index_max&timezone=auto`
+                ).then(res => res.json());
 
-                const dailyForecast = data.daily?.time?.slice(1, 7).map((t: string, i: number) => ({
+                // Open-Meteo Air Quality API
+                const airPromise = fetch(
+                    `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${latitude}&longitude=${longitude}&current=us_aqi`
+                ).then(res => res.json());
+
+                const [weatherData, airData] = await Promise.all([weatherPromise, airPromise]);
+
+                if (weatherData.error) throw new Error('Weather API error');
+
+                const dailyForecast = weatherData.daily?.time?.slice(1, 7).map((t: string, i: number) => ({
                     time: t,
-                    code: data.daily.weathercode[i + 1],
-                    max: data.daily.temperature_2m_max[i + 1],
-                    min: data.daily.temperature_2m_min[i + 1]
+                    code: weatherData.daily.weathercode[i + 1],
+                    max: weatherData.daily.temperature_2m_max[i + 1],
+                    min: weatherData.daily.temperature_2m_min[i + 1]
                 })) || [];
 
-                const uv = data.daily?.uv_index_max?.[0] || 0;
+                const uv = weatherData.daily?.uv_index_max?.[0] || 0;
+                const humidity = weatherData.current?.relative_humidity_2m || 50;
+                const aqi = airData?.current?.us_aqi || null;
 
                 setWeather((prev: any) => ({
                     ...prev,
-                    temp: data.current?.temperature_2m,
-                    feelsLike: data.current?.apparent_temperature,
-                    code: data.current?.weather_code,
-                    windSpeed: data.current?.wind_speed_10m,
-                    humidity: 50,
+                    temp: weatherData.current?.temperature_2m,
+                    feelsLike: weatherData.current?.apparent_temperature,
+                    code: weatherData.current?.weather_code,
+                    windSpeed: weatherData.current?.wind_speed_10m,
+                    humidity: humidity,
                     hourly: [],
                     daily: dailyForecast,
                     uv: Math.round(uv),
-                    aqi: Math.floor(Math.random() * 100) + 20,
+                    aqi: aqi, // Real AQI
                     loading: false,
                     error: false
                 }));
@@ -286,7 +314,25 @@ export const WidgetDashboard = React.memo(function WidgetDashboard({ isDarkMode,
             }
         };
 
-        const fetchLocationName = async () => {
+        const fetchLocationName = async (latitude?: number, longitude?: number) => {
+            // 1. Try Reverse Geocoding if coords are available (Most Accurate)
+            if (latitude && longitude) {
+                try {
+                    const res = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${latitude}&longitude=${longitude}&localityLanguage=zh`);
+                    if (res.ok) {
+                        const data = await res.json();
+                        const city = data.city || data.locality || data.principalSubdivision;
+                        if (city) {
+                            setLocationName(city.replace('市', '')); // Remove 'City' suffix for cleaner look
+                            return;
+                        }
+                    }
+                } catch (e) {
+                    console.warn('Reverse geocoding failed, falling back to IP');
+                }
+            }
+
+            // 2. Fallback to IP-based APIs
             const tryApi = async (url: string, extractor: (data: any) => string | null) => {
                 try {
                     const res = await fetch(url);
@@ -298,7 +344,11 @@ export const WidgetDashboard = React.memo(function WidgetDashboard({ isDarkMode,
                 }
             };
 
-            let name = await tryApi('https://get.geojs.io/v1/ip/geo.json', (data) => data.city || data.region);
+            let name = await tryApi('https://ipapi.co/json/', (data) => data.city);
+
+            if (!name || name === '本地') {
+                name = await tryApi('https://get.geojs.io/v1/ip/geo.json', (data) => data.city || data.region);
+            }
 
             if (!name || name === '本地') {
                 name = await tryApi('https://ipwho.is/', (data) => data.city || data.region);
@@ -322,7 +372,20 @@ export const WidgetDashboard = React.memo(function WidgetDashboard({ isDarkMode,
                 }
             };
 
-            // 1. Try GeoJS
+            // 1. Try ipapi.co (High accuracy for city/latlong)
+            const ipapiData = await tryProvider('https://ipapi.co/json/', (d) => ({
+                lat: d.latitude,
+                lon: d.longitude,
+                name: d.city
+            }));
+
+            if (ipapiData && ipapiData.lat && ipapiData.lon) {
+                if (ipapiData.name) setLocationName(translateCity(ipapiData.name));
+                fetchWeatherData(ipapiData.lat, ipapiData.lon);
+                return;
+            }
+
+            // 2. Try GeoJS
             const geojsData = await tryProvider('https://get.geojs.io/v1/ip/geo.json', (d) => ({
                 lat: d.latitude ? parseFloat(d.latitude) : null,
                 lon: d.longitude ? parseFloat(d.longitude) : null,
@@ -335,7 +398,7 @@ export const WidgetDashboard = React.memo(function WidgetDashboard({ isDarkMode,
                 return;
             }
 
-            // 2. Try IPWhoIs (Fallback)
+            // 3. Try IPWhoIs (Fallback)
             const ipwhoisData = await tryProvider('https://ipwho.is/', (d) => ({
                 lat: d.latitude,
                 lon: d.longitude,
@@ -359,7 +422,7 @@ export const WidgetDashboard = React.memo(function WidgetDashboard({ isDarkMode,
                     (position) => {
                         const { latitude, longitude } = position.coords;
                         fetchWeatherData(latitude, longitude);
-                        fetchLocationName();
+                        fetchLocationName(latitude, longitude);
                     },
                     () => {
                         fetchByIP();
@@ -568,13 +631,13 @@ export const WidgetDashboard = React.memo(function WidgetDashboard({ isDarkMode,
                     const dateStr = `${date.getMonth() + 1}/${date.getDate()}`;
                     return (
                         <div key={i} className="flex flex-col items-center justify-between h-full w-full">
-                            <span className="text-[10px] opacity-60 font-medium mb-0.5">{dateStr}</span>
+                            <span className="text-xs opacity-60 font-medium mb-0.5">{dateStr}</span>
                             <div className="scale-90 origin-center">
                                 {getWeatherIcon(day.code, 18)}
                             </div>
                             <div className="flex flex-col items-center leading-none mt-auto">
-                                <span className="text-[10px] font-bold opacity-90">{Math.round(day.max)}°</span>
-                                <span className="text-[9px] opacity-40 leading-tight">{Math.round(day.min)}°</span>
+                                <span className="text-xs font-bold opacity-90">{Math.round(day.max)}°</span>
+                                <span className="text-xs opacity-40 leading-tight">{Math.round(day.min)}°</span>
                             </div>
                         </div>
                     );
@@ -605,8 +668,10 @@ export const WidgetDashboard = React.memo(function WidgetDashboard({ isDarkMode,
         );
     }
 
-    // Card with multi-layer glass and gradient border - fixed height for consistency
-    const cardBase = `relative overflow-hidden flex flex-row items-center justify-between p-3 rounded-3xl backdrop-blur-2xl transition-all duration-300 active:scale-95 border-0 h-[120px] ${isDarkMode ? 'bg-slate-900/50 text-white' : 'bg-white/50 text-slate-800'}`;
+    const cardBase = `relative overflow-hidden flex flex-row items-center justify-between p-2 md:p-3 rounded-3xl backdrop-blur-xl transition-all duration-300 active:scale-95 border h-[120px] sm:h-[120px] md:h-[130px] ${isDarkMode
+        ? 'bg-slate-900/40 border-white/10 text-white text-shadow-sm shadow-xl shadow-black/20'
+        : 'bg-white/40 border-white/60 text-slate-900 shadow-lg shadow-slate-200/50'
+        }`;
 
     const nextHoliday = getNextHoliday();
     const pomodoroMins = Math.floor(pomodoroTime / 60);
@@ -617,11 +682,9 @@ export const WidgetDashboard = React.memo(function WidgetDashboard({ isDarkMode,
             {/* Time Widget */}
             <TiltCard className="group">
                 <div className={cardBase}>
-                    <GradientBorder isDarkMode={isDarkMode} />
-                    {/* Multi-layer glass effect */}
-                    <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent rounded-3xl pointer-events-none" />
-                    <div className="absolute inset-0 bg-gradient-to-tl from-white/5 to-transparent rounded-3xl pointer-events-none" />
-                    <div className={`absolute inset-0 bg-gradient-to-br ${getTimePeriodGradient()} pointer-events-none`} />
+                    <GradientBorder isDarkMode={isDarkMode} customColor={widgetConfig?.customColors?.time} />
+                    {/* Clean Glass Effect: Removed heavy gradients for a cleaner look */}
+                    <div className={`absolute inset-0 pointer-events-none ${isDarkMode ? 'bg-white/5' : 'bg-white/10'}`} />
 
                     {/* Left: Main Info - takes full available space */}
                     <div className="flex flex-col justify-center h-full z-10 flex-1">
@@ -646,19 +709,19 @@ export const WidgetDashboard = React.memo(function WidgetDashboard({ isDarkMode,
                         <AnimatePresence mode="wait">
                             {timeMode === 'clock' && (
                                 <motion.div key="clock" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-                                    <div className="text-3xl font-bold tabular-nums tracking-tight leading-none mb-1">
+                                    <div className="text-2xl md:text-3xl font-bold tabular-nums tracking-tight leading-none mb-1 text-slate-900 dark:text-white">
                                         {mounted && time ? time.toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' }) : '--:--'}
-                                        <span className="text-base opacity-50 ml-1">{mounted && time ? time.getSeconds().toString().padStart(2, '0') : '00'}</span>
+                                        <span className={`text-base ml-1 ${isDarkMode ? 'opacity-50' : 'text-slate-500'}`}>{mounted && time ? time.getSeconds().toString().padStart(2, '0') : '00'}</span>
                                     </div>
-                                    <div className="flex items-center gap-2 text-sm flex-wrap">
-                                        <span className="opacity-60 font-medium">{mounted && time ? formatDate(time) : ''}</span>
-                                        <span className="opacity-40">{mounted && time ? getLunarDate(time) : ''}</span>
+                                    <div className="flex items-center gap-2 text-xs sm:text-sm flex-wrap">
+                                        <span className={`font-medium ${isDarkMode ? 'opacity-60' : 'text-slate-600'}`}>{mounted && time ? formatDate(time) : ''}</span>
+                                        <span className={`${isDarkMode ? 'opacity-40' : 'text-slate-500'}`}>{mounted && time ? getLunarDate(time) : ''}</span>
                                         {mounted && (() => {
                                             const termInfo = getSolarTermInfo();
                                             if (termInfo.isToday) {
                                                 return <span className="text-indigo-500 font-medium">今日{termInfo.name}</span>;
                                             }
-                                            return <span className="opacity-40">距{termInfo.name}{termInfo.days}天</span>;
+                                            return <span className={`${isDarkMode ? 'opacity-40' : 'text-slate-500'}`}>距{termInfo.name}{termInfo.days}天</span>;
                                         })()}
                                     </div>
                                 </motion.div>
@@ -683,9 +746,9 @@ export const WidgetDashboard = React.memo(function WidgetDashboard({ isDarkMode,
                                         const dateStr = time ? dateFormatter.format(time) : '';
                                         return (
                                             <div key={idx} className="flex items-center gap-2 text-xs">
-                                                <span className="opacity-60 w-11 text-left shrink-0">{tz.name}</span>
-                                                <span className="opacity-40 w-8 text-right shrink-0 tabular-nums">{dateStr}</span>
-                                                <span className="font-bold tabular-nums">{timeStr}</span>
+                                                <span className={`w-11 text-left shrink-0 ${isDarkMode ? 'opacity-60' : 'text-slate-600'}`}>{tz.name}</span>
+                                                <span className={`w-8 text-right shrink-0 tabular-nums ${isDarkMode ? 'opacity-40' : 'text-slate-500'}`}>{dateStr}</span>
+                                                <span className="font-bold tabular-nums text-slate-900 dark:text-white">{timeStr}</span>
                                             </div>
                                         );
                                     })}
@@ -719,9 +782,9 @@ export const WidgetDashboard = React.memo(function WidgetDashboard({ isDarkMode,
 
                     {/* Right: Holiday Countdown - fixed width */}
                     <div className="z-10 pl-4 border-l border-white/10 dark:border-white/5 h-full flex flex-col justify-center items-center min-w-[70px]">
-                        <div className="text-3xl font-bold text-indigo-500">{nextHoliday.days}</div>
-                        <div className="text-xs opacity-50">天后</div>
-                        <div className="text-sm font-medium">{nextHoliday.name}</div>
+                        <div className="text-2xl md:text-3xl font-bold text-indigo-500">{nextHoliday.days}</div>
+                        <div className={`text-xs ${isDarkMode ? 'opacity-50' : 'text-slate-500'}`}>天后</div>
+                        <div className="text-xs font-medium text-slate-700 dark:text-white">{nextHoliday.name}</div>
                     </div>
                 </div>
             </TiltCard>
@@ -729,26 +792,25 @@ export const WidgetDashboard = React.memo(function WidgetDashboard({ isDarkMode,
             {/* Weather Widget */}
             <TiltCard className="group">
                 <div className={cardBase}>
-                    <GradientBorder isDarkMode={isDarkMode} />
-                    <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent rounded-3xl pointer-events-none" />
-                    <div className="absolute inset-0 bg-gradient-to-br from-cyan-500/10 via-transparent to-transparent pointer-events-none" />
+                    <GradientBorder isDarkMode={isDarkMode} customColor={widgetConfig?.customColors?.weather} />
+                    <div className={`absolute inset-0 pointer-events-none ${isDarkMode ? 'bg-white/5' : 'bg-white/10'}`} />
                     <WeatherParticles code={weather.code} />
 
                     {/* Left: Main Info */}
                     <div className="flex flex-col justify-center h-full z-10 min-w-[120px]">
                         <div className="flex items-center gap-1.5 mb-1">
                             <MapPin size={12} className="text-cyan-500" />
-                            <span className="text-[11px] font-medium opacity-70 truncate max-w-[80px]">{locationName}</span>
+                            <span className={`text-xs font-medium truncate max-w-[100px] sm:max-w-[140px] ${isDarkMode ? 'opacity-70' : 'text-slate-700'}`}>{locationName}</span>
                         </div>
                         <div className="flex items-center gap-2">
-                            <span className="text-3xl font-bold leading-none">{weather.temp}°</span>
+                            <span className="text-2xl md:text-3xl font-bold leading-none text-slate-900 dark:text-white">{weather.temp}°</span>
                             {getWeatherIcon(weather.code, 32, "", true)}
                         </div>
-                        <div className="flex items-center gap-2 mt-1 text-[11px]">
-                            <span className="opacity-70">{getWeatherDesc(weather.code)}</span>
-                            <span className="opacity-50">体感 {weather.feelsLike}°</span>
+                        <div className="flex items-center gap-2 mt-1 text-xs">
+                            <span className={`${isDarkMode ? 'opacity-70' : 'text-slate-700'}`}>{getWeatherDesc(weather.code)}</span>
+                            <span className={`${isDarkMode ? 'opacity-50' : 'text-slate-500'}`}>体感 {weather.feelsLike}°</span>
                         </div>
-                        <div className="text-[10px] text-cyan-600 dark:text-cyan-400 font-medium mt-0.5">
+                        <div className="text-xs text-cyan-600 dark:text-cyan-400 font-medium mt-0.5">
                             {getClothingAdvice(weather.feelsLike || weather.temp || 20)}
                         </div>
                     </div>
@@ -756,18 +818,19 @@ export const WidgetDashboard = React.memo(function WidgetDashboard({ isDarkMode,
                     {/* Right: Metrics + Chart */}
                     <div className="z-10 pl-3 border-l border-white/10 dark:border-white/5 h-full flex flex-col justify-center gap-1.5 flex-1">
                         {/* Top: AQI & UV in row */}
-                        <div className="flex items-center gap-4 text-[11px] -ml-2">
+                        <div className="flex items-center gap-4 text-xs -ml-2">
                             <div className="flex items-center gap-1">
                                 <Shield size={12} className="text-green-500" />
-                                <span className="opacity-50">AQI</span>
-                                <span className="font-bold">{weather.aqi || '--'}</span>
-                                {weather.aqi && <span className="opacity-60">{getAQIDesc(weather.aqi)}</span>}
+                                <span className={`${isDarkMode ? 'opacity-50' : 'text-slate-500'}`}>AQI</span>
+                                <span className="font-bold text-slate-900 dark:text-white">{weather.aqi || '--'}</span>
+                                {weather.aqi && <span className={`${isDarkMode ? 'opacity-60' : 'text-slate-600'}`}>{getAQIDesc(weather.aqi)}</span>}
                             </div>
+
                             <div className="flex items-center gap-1">
                                 <Sun size={12} className="text-amber-500" />
-                                <span className="opacity-50">UV</span>
-                                <span className="font-bold">{weather.uv || '--'}</span>
-                                {weather.uv !== null && <span className="opacity-60">{getUVDesc(weather.uv)}</span>}
+                                <span className={`${isDarkMode ? 'opacity-50' : 'text-slate-500'}`}>UV</span>
+                                <span className="font-bold text-slate-900 dark:text-white">{weather.uv || '--'}</span>
+                                {weather.uv !== null && <span className={`${isDarkMode ? 'opacity-60' : 'text-slate-600'}`}>{getUVDesc(weather.uv)}</span>}
                             </div>
                         </div>
                         {/* Bottom: Daily Forecast */}
@@ -781,9 +844,8 @@ export const WidgetDashboard = React.memo(function WidgetDashboard({ isDarkMode,
             {/* Tools Widget - Todo / Stock / Countdown */}
             <TiltCard className="group">
                 <div className={cardBase}>
-                    <GradientBorder isDarkMode={isDarkMode} />
-                    <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent rounded-3xl pointer-events-none" />
-                    <div className="absolute inset-0 bg-gradient-to-br from-emerald-500/10 via-transparent to-transparent pointer-events-none" />
+                    <GradientBorder isDarkMode={isDarkMode} customColor={widgetConfig?.customColors?.tools} />
+                    <div className={`absolute inset-0 pointer-events-none ${isDarkMode ? 'bg-white/5' : 'bg-white/10'}`} />
 
                     <div className="flex flex-col justify-between h-full z-10 w-full">
                         {/* Mode Switcher & Stats */}
