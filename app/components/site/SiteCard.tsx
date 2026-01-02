@@ -9,6 +9,7 @@ import { Globe, MoreHorizontal, ExternalLink, Folder } from 'lucide-react';
 import { hexToRgb, getAccessibleTextColor, shouldUseTextShadow, FAVICON_PROVIDERS } from '@/lib/utils';
 import { ICON_MAP, FONTS } from '@/lib/constants';
 import { useFonts } from '@/app/hooks/useFonts';
+import { useOnlineStatus } from '@/app/hooks/useOnlineStatus';
 
 interface SiteCardProps {
     site: any;
@@ -20,6 +21,7 @@ interface SiteCardProps {
     onContextMenu?: (e: React.MouseEvent, id: any) => void;
     isOverlay?: boolean;
     onFolderClick?: (folder: any) => void;
+    isDropTarget?: boolean; // Visual feedback for folder drop target
 }
 
 export const SiteCard = React.memo(function SiteCard({
@@ -33,21 +35,28 @@ export const SiteCard = React.memo(function SiteCard({
     isOverlay,
     onFolderClick,
     childCount, // New Prop
+    isDropTarget, // Visual feedback for folder drop target
 }: SiteCardProps & { childCount?: number }) {
+    const isOnline = useOnlineStatus();
     const [iconState, setIconState] = useState(0);
     const [imgSrc, setImgSrc] = useState<string | null>(null);
     const [hasError, setHasError] = useState(false);
 
     useEffect(() => {
         setIconState(0);
-    }, [site.url, site.iconType]);
+        setHasError(false);
+    }, [site.url, site.iconType, isOnline]);
 
     useEffect(() => {
         if (site.iconType === 'upload' && site.customIconUrl) {
             setImgSrc(site.customIconUrl);
             setHasError(false);
+        } else if (site.iconType === 'auto' && site.icon && (site.icon.startsWith('/') || site.icon.startsWith('http'))) {
+            // Priority 1: Local Cache
+            setImgSrc(site.icon);
+            setHasError(false);
         }
-    }, [site.customIconUrl, site.iconType]);
+    }, [site.customIconUrl, site.iconType, site.icon]);
 
     const handleClick = (e: React.MouseEvent) => {
         // Assuming isDragging is defined elsewhere or will be added.
@@ -67,14 +76,7 @@ export const SiteCard = React.memo(function SiteCard({
     const handleImageError = () => {
         if (hasError) return;
         setHasError(true);
-
-        if (site.url) {
-            try {
-                const domain = new URL(site.url).hostname;
-                const fallbackUrl = `https://www.google.com/s2/favicons?domain=${domain}&sz=128`;
-                setImgSrc(fallbackUrl);
-            } catch (e) { }
-        }
+        // Fallback logic handled in render
     };
 
     const Icon = site.type === 'folder' ? Folder : (ICON_MAP[site.icon] || Globe);
@@ -240,26 +242,54 @@ export const SiteCard = React.memo(function SiteCard({
     const descFontSize = site.descSize || settings.globalDescSize;
 
     // Icon Rendering
+    // Unified Logic for both Upload and Auto (with Cache)
+    // Unified Logic for both Upload and Auto (with Cache)
     let renderIcon;
     let showImage = false;
     let currentSrc = '';
 
-    if ((site.iconType === 'auto' || site.iconType === 'upload') && site.type !== 'folder') {
-        if (site.iconType === 'upload' && imgSrc && !hasError) {
-            currentSrc = imgSrc;
+    // STRICT Logic Implementation:
+    // 1. Auto: Local Cache -> Online Fetch
+    // 2. Upload: Uploaded File -> First Char (Fallback)
+    // 3. Gallery: Icon (Handled by else block via iconType check)
+
+    if (site.iconType === 'auto') {
+        // Auto Mode
+        const hasLocalCache = site.icon && (site.icon.startsWith('/') || site.icon.startsWith('http'));
+
+        if (!hasError && hasLocalCache) {
+            // Priority 1: Local Cache
+            // We use site.icon directly. If it fails, onError will trigger and we switch to providers.
+            currentSrc = site.icon;
+            showImage = true;
         } else {
-            try {
-                const domain = new URL(site.url).hostname;
-                const providerIndex = site.iconType === 'upload' ? (iconState - 1) : iconState;
-                currentSrc = FAVICON_PROVIDERS[providerIndex % FAVICON_PROVIDERS.length](domain);
-            } catch (e) {
-                currentSrc = '';
+            // Priority 2: Online Fetch (Providers) - ONLY if Online
+            if (isOnline) {
+                let providerIndex = iconState;
+                if (hasLocalCache) {
+                    providerIndex = iconState - 1;
+                }
+
+                if (providerIndex >= 0 && providerIndex < FAVICON_PROVIDERS.length) {
+                    try {
+                        const domain = new URL(site.url).hostname;
+                        currentSrc = FAVICON_PROVIDERS[providerIndex](domain);
+                        showImage = true;
+                    } catch (e) {
+                        // Invalid URL, let it fail to text
+                    }
+                }
             }
         }
-
-        if (currentSrc && iconState < (FAVICON_PROVIDERS.length + 2)) {
+    } else if (site.iconType === 'upload') {
+        // Upload Mode
+        if (site.customIconUrl && !hasError) {
+            // Priority 1: Uploaded File
+            currentSrc = site.customIconUrl;
             showImage = true;
         }
+        // Priority 2: Fallback to Text (First Char) comes naturally if showImage is false.
+        // We DO NOT fallback to online providers for Upload mode.
     }
 
     // Child Count Badge Logic
@@ -269,15 +299,14 @@ export const SiteCard = React.memo(function SiteCard({
         renderIcon = (
             <div className="w-full h-full rounded-xl shrink-0 overflow-hidden relative">
                 <NextImage
+                    key={currentSrc}
                     src={currentSrc}
                     alt={site.name}
                     width={40}
                     height={40}
                     className="object-contain w-full h-full"
                     onError={() => {
-                        if (site.iconType === 'upload') {
-                            setHasError(true);
-                        }
+                        setHasError(true);
                         setIconState(prev => prev + 1);
                     }}
                     unoptimized={true}
@@ -322,7 +351,14 @@ export const SiteCard = React.memo(function SiteCard({
     return (
         <motion.div
             className={`spotlight-card relative h-full overflow-hidden ${isOverlay ? 'shadow-2xl scale-105 cursor-grabbing' : ''}`}
-            style={{ borderRadius: settings.cardRadius ?? 16 }}
+            style={{
+                borderRadius: settings.cardRadius ?? 16,
+                ...(isDropTarget && site.type === 'folder' ? {
+                    transform: 'scale(1.05)',
+                    boxShadow: '0 0 20px rgba(34, 197, 94, 0.5), 0 0 40px rgba(34, 197, 94, 0.3)',
+                    transition: 'all 0.2s ease-in-out'
+                } : {})
+            }}
             whileHover={!isOverlay && (settings.enableHover ?? true) ? {
                 scale: 1.02,
                 y: -4 * (settings.hoverIntensity ?? 1),
@@ -342,7 +378,7 @@ export const SiteCard = React.memo(function SiteCard({
                 onContextMenu={(e) => onContextMenu && onContextMenu(e, site.id)}
                 className={`group relative block h-full border transition-all duration-300 overflow-hidden isolate z-10 ${isLoggedIn ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'} ${site.isHidden && isLoggedIn ? 'opacity-50 grayscale' : ''}`}
                 style={{
-                    height: settings.cardHeight,
+                    height: `var(--mobile-card-height, ${settings.cardHeight}px)`,
                     borderRadius: settings.cardRadius ?? 16,
                     backgroundColor: bgColor,
                     borderColor: borderColor,
@@ -361,8 +397,9 @@ export const SiteCard = React.memo(function SiteCard({
                 )}
 
                 <div className={`relative z-10 h-full flex flex-col ${paddingClass} ${isStandardLayout ? 'justify-between' : 'justify-center'}`}>
-                    <div className={`flex ${isStandardLayout ? 'items-start' : 'items-center'} justify-between ${gapClass}`}>
-                        <div className={`flex items-center ${gapClass} min-w-0 flex-1`}>
+                    <div className={`flex ${isStandardLayout ? 'items-start' : 'items-center'} justify-between w-full ${gapClass}`}>
+                        {/* 左侧：图标和名称 */}
+                        <div className={`flex items-center ${gapClass} min-w-0 flex-1 overflow-hidden`}>
                             {/* Icon Wrapper with Badge */}
                             <div className="relative shrink-0" style={{ width: iconSizePx, height: iconSizePx }}>
                                 {site.iconType === 'library' ? (
@@ -375,16 +412,12 @@ export const SiteCard = React.memo(function SiteCard({
                                     </div>
                                 )}
 
-                                {showCount && (
-                                    <span className="absolute -top-1.5 -right-1.5 bg-red-500 text-white text-[10px] px-1 rounded-full min-w-[16px] h-[16px] flex items-center justify-center border border-white dark:border-slate-800 shadow-sm z-20 leading-none">
-                                        {childCount}
-                                    </span>
-                                )}
+
                             </div>
 
-                            <div className={`flex flex-1 min-w-0 ${isRowLayout ? 'flex-row items-baseline gap-2' : 'flex-col'}`}>
+                            <div className={`flex min-w-0 overflow-hidden ${isRowLayout ? 'flex-row items-baseline gap-1 sm:gap-2 flex-1' : 'flex-col'}`}>
                                 <span
-                                    className={`font-bold truncate text-sm sm:text-base ${hasShadow ? 'text-shadow-sm' : ''} shrink-0`}
+                                    className={`font-bold truncate text-xs sm:text-sm md:text-base leading-tight ${hasShadow ? 'text-shadow-sm' : ''}`}
                                     style={{ color: titleColorStyle, fontFamily: titleFontFamily, fontSize: titleFontSize ? `${titleFontSize}px` : undefined }}>
                                     {site.name}
                                 </span>
@@ -395,14 +428,28 @@ export const SiteCard = React.memo(function SiteCard({
                             </div>
                         </div>
 
-                        {isLoggedIn ? (<button onClick={(e) => {
-                            e.stopPropagation();
-                            onEdit && onEdit();
-                        }}
-                            className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 transition-all active:scale-95 shrink-0">
-                            <MoreHorizontal size={16} style={{ color: textColor }} /></button>) : (<ExternalLink size={14}
-                                className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
-                                style={{ color: textColor }} />)}
+                        {/* 右侧：统计数字和操作按钮 - 始终靠右 */}
+                        <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
+                            {showCount && (
+                                <div
+                                    className="flex items-center justify-center min-w-[22px] h-[22px] px-1.5 rounded-full text-[11px] font-bold text-white shadow-lg leading-none transform scale-100"
+                                    style={{
+                                        backgroundColor: site.color || '#6366f1',
+                                        boxShadow: `0 2px 10px -1px rgba(${brandRgb.r}, ${brandRgb.g}, ${brandRgb.b}, 0.5)`
+                                    }}
+                                >
+                                    {childCount}
+                                </div>
+                            )}
+                            {isLoggedIn ? (<button onClick={(e) => {
+                                e.stopPropagation();
+                                onEdit && onEdit();
+                            }}
+                                className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 transition-all active:scale-95 shrink-0">
+                                <MoreHorizontal size={16} style={{ color: textColor }} /></button>) : (<ExternalLink size={14}
+                                    className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+                                    style={{ color: textColor }} />)}
+                        </div>
                     </div>
 
                     {/* Footer Description for Standard Layout */}
@@ -447,7 +494,7 @@ export const SortableSiteCard = React.memo(function SortableSiteCard({ site, isL
             {/* Outer motion.div handles entry/exit/layout animations */}
             <motion.div
                 layout={props.settings?.enableDrag ?? true} // Enable layout animation (smooth reordering) toggle
-                initial={{ opacity: 0, scale: 0.9 }}
+                initial={false} // Disable entry animation to prevent "jump" effect when switching folders
                 animate={{ opacity: isDragging ? 0.5 : 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.9 }}
                 transition={{

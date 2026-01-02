@@ -3,21 +3,30 @@ import path from 'path';
 import https from 'https';
 import { prisma } from './prisma';
 
+// Directory paths - computed at module load but directories created on demand
 const WALLPAPER_DIR = path.join(process.cwd(), 'public', 'uploads', 'wallpapers');
 const BING_DIR = path.join(WALLPAPER_DIR, 'bing');
 
-// Ensure directories exist
-if (!fs.existsSync(BING_DIR)) {
-    fs.mkdirSync(BING_DIR, { recursive: true });
+// Helper function to ensure directory exists (called at runtime, not build time)
+function ensureBingDirExists() {
+    if (!fs.existsSync(BING_DIR)) {
+        fs.mkdirSync(BING_DIR, { recursive: true });
+    }
 }
 
 export async function fetchAndCacheBingWallpaper() {
     try {
         // 0. Cache First Strategy: Check if we already have today's wallpaper
-        const today = new Date();
-        const yyyy = today.getFullYear();
-        const mm = String(today.getMonth() + 1).padStart(2, '0');
-        const dd = String(today.getDate()).padStart(2, '0');
+        const now = new Date();
+        // Use local time for consistency with users expectation of "today"
+        const offset = now.getTimezoneOffset() * 60000;
+        const localDate = new Date(now.getTime() - offset);
+        const yyyy = localDate.toISOString().slice(0, 4);
+        const mm = localDate.toISOString().slice(5, 7);
+        const dd = localDate.toISOString().slice(8, 10);
+
+        // Bing API uses enddate usually for file naming in many tools, but startdate in JSON. 
+        // We will use our own standardized format for local cache: bing-YYYYMMDD.jpg
         const todayStr = `${yyyy}${mm}${dd}`;
         const todayFilename = `bing-${todayStr}.jpg`;
 
@@ -26,6 +35,7 @@ export async function fetchAndCacheBingWallpaper() {
         });
 
         if (cachedToday && fs.existsSync(path.join(process.cwd(), 'public', cachedToday.url))) {
+            console.log('[Bing Sync] Using cached wallpaper for today:', cachedToday.filename);
             return cachedToday;
         }
 
@@ -91,10 +101,13 @@ export async function fetchAndCacheBingWallpaper() {
         });
 
         if (!wallpaper || !fs.existsSync(filepath)) {
+            // Ensure directory exists before download (runtime check for Docker symlinks)
+            ensureBingDirExists();
+
             // 3. Download if not exists
             await new Promise((resolve, reject) => {
                 const file = fs.createWriteStream(filepath);
-                https.get(imageUrl, (response) => {
+                const req = https.get(imageUrl, (response) => {
                     if (response.statusCode !== 200) {
                         reject(new Error(`Failed to download wallpaper: ${response.statusCode}`));
                         return;
@@ -104,9 +117,17 @@ export async function fetchAndCacheBingWallpaper() {
                         file.close();
                         resolve(true);
                     });
-                }).on('error', (err) => {
+                });
+
+                req.on('error', (err) => {
                     fs.unlink(filepath, () => { });
                     reject(err);
+                });
+
+                req.setTimeout(5000, () => {
+                    req.destroy();
+                    fs.unlink(filepath, () => { });
+                    reject(new Error('Download timeout'));
                 });
             });
 
